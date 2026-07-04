@@ -1,0 +1,20 @@
+{
+  "name": "csharp-dotnet-recap-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-content.mjs",
+    "og": "node scripts/make-og.mjs",
+    "dev": "npm run sync && astro dev",
+    "start": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.40.0",
+    "astro": "^6.4.8",
+    "sharp": "^0.35.2"
+  }
+}

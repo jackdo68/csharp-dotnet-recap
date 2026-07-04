@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Astro site (in /site)
+site/node_modules/
+site/dist/
+site/.astro/
+
+# Generated docs — source of truth is /topics, synced at build time
+site/src/content/docs/topic-*/
+site/src/content/docs/guide.md
+site/src/content/docs/commands.md
+site/src/content/docs/setup.md
+
+# .NET build output (if you keep exercise code in this repo)
+**/bin/
+**/obj/
+*.db

@@ -1,0 +1,56 @@
+---
+title: C# .NET Recap
+description: C# and .NET for Node.js + TypeScript developers — the fundamental differences, taught by building a Loan Application API.
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+A hands-on C#/.NET recap for an experienced **Node.js + TypeScript** developer. It doesn't try to cover everything — it covers the **fundamental differences** between the two stacks, because the other ~70% you already know. Every topic has a **lesson** (concepts, always mapped to your TS knowledge), **exercises** (hands-on, building one Loan Application API across the whole course), and **solutions** (full working code + interview talking points).
+
+## The seven topics
+
+<CardGrid>
+  <LinkCard
+    title="Topic 1 · Platform & Tooling"
+    href={`${import.meta.env.BASE_URL}topic-1-platform-and-tooling/lesson/`}
+    description="C# vs .NET vs the dotnet CLI, project anatomy, why you never import your own files, single-file scripts."
+  />
+  <LinkCard
+    title="Topic 2 · Language & Type System"
+    href={`${import.meta.env.BASE_URL}topic-2-language-and-type-system/lesson/`}
+    description="Properties, records, LINQ, nullability — and nominal vs structural typing, the philosophy split from TS."
+  />
+  <LinkCard
+    title="Topic 3 · Runtime Types & Compilation"
+    href={`${import.meta.env.BASE_URL}topic-3-runtime-types-and-compilation/lesson/`}
+    description="tsc erases types; Roslyn keeps them. IL, the CLR, reflection, and real generics."
+  />
+  <LinkCard
+    title="Topic 4 · Errors & Failure Philosophy"
+    href={`${import.meta.env.BASE_URL}topic-4-errors-and-failure-philosophy/lesson/`}
+    description="Typed exceptions vs undefined sentinels — what happens when the types are wrong anyway."
+  />
+  <LinkCard
+    title="Topic 5 · Web API & Dependency Injection"
+    href={`${import.meta.env.BASE_URL}topic-5-web-api-and-di/lesson/`}
+    description="Build the Loan API: controllers, constructor injection, DI lifetimes, batteries-included vs assemble-your-own."
+  />
+  <LinkCard
+    title="Topic 6 · Data Access & Testing"
+    href={`${import.meta.env.BASE_URL}topic-6-data-access-and-testing/lesson/`}
+    description="EF Core (the Prisma of .NET), migrations, and xUnit tests that prove why DI matters."
+  />
+  <LinkCard
+    title="Topic 7 · Concurrency & Threading"
+    href={`${import.meta.env.BASE_URL}topic-7-concurrency-and-threading/lesson/`}
+    description="A thread pool, not an event loop: real parallelism, race conditions, lock, Interlocked, and the I/O-vs-CPU rule."
+  />
+</CardGrid>
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="Guide" href={`${import.meta.env.BASE_URL}guide/`} description="How the course works, the five big differences, and the 2–3 day plan." />
+  <LinkCard title="Commands" href={`${import.meta.env.BASE_URL}commands/`} description="The dotnet CLI cheat sheet, with npm equivalents." />
+  <LinkCard title="Setup" href={`${import.meta.env.BASE_URL}setup/`} description="Install the .NET SDK and VS Code tooling (~15 min)." />
+</CardGrid>

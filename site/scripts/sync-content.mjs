@@ -10,8 +10,8 @@ const repoRoot = path.resolve(__dirname, '..', '..'); // site/scripts -> repo ro
 const topicsDir = path.join(repoRoot, 'topics');
 const docsDir = path.join(repoRoot, 'site', 'src', 'content', 'docs');
 
-const orderByFile = { lesson: 1, exercises: 2, solutions: 3 };
-const labelByFile = { lesson: 'Lesson', exercises: 'Exercises', solutions: 'Solutions' };
+const orderByFile = { lesson: 1, exercises: 2 };
+const labelByFile = { lesson: 'Lesson', exercises: 'Exercises & Solutions' };
 
 const prettify = (name) => name.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
 

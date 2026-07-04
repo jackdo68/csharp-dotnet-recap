@@ -20,11 +20,10 @@ Topic 1 (platform & tooling) is the vocabulary you need before any of them.
 
 ## The practice loop
 
-Each topic has three pages:
+Each topic has two pages:
 
 1. **Lesson** — the concepts, every one mapped back to what you know from Node/TS. Read it top to bottom.
-2. **Exercises** — hands-on tasks. Topics 1–4 use small console programs; Topics 5–7 build and extend a real **Loan Application API** (the same app grows across the topics). Do them — the differences only stick when the compiler yells at you.
-3. **Solutions** — full working code plus the interview talking point each exercise was secretly teaching.
+2. **Exercises & Solutions** — hands-on tasks, each followed by its solution: full working code plus the interview talking point it was secretly teaching. Topics 1–4 use small console programs; Topics 5–7 build and extend a real **Loan Application API** (the same app grows across the topics). Attempt each exercise before reading its solution — the differences only stick when the compiler yells at you.
 
 Don't copy-paste the code. Type it. The muscle memory of `{ get; set; }`, `:` for inheritance, and attribute brackets is half the value.
 

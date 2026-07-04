@@ -31,7 +31,7 @@ All exercises assume this folder. Each topic tells you exactly what to scaffold 
 ## About this repo
 
 ```
-topics/       ← the course content (source of truth): lesson / exercises / solutions per topic
+topics/       ← the course content (source of truth): lesson / exercises (with solutions) per topic
 COMMANDS.md   ← the dotnet CLI cheat sheet
 site/         ← the Astro (Starlight) site that renders it all
 ```

@@ -1,0 +1,77 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Repository Overview
+
+A C#/.NET course site for an experienced **Node.js + TypeScript developer** (the repo owner). It deliberately does **not** cover all of C# — it covers the fundamental differences between C#/.NET and Node+TS, organized around "the five big differences" (see `topics/README.md`). All hands-on work builds one running example across the topics: a **Loan Application API** (`LoanApp`).
+
+The published site: https://jackdo68.github.io/csharp-dotnet-recap/
+
+## Architecture
+
+```
+topics/       ← SOURCE OF TRUTH: course markdown (lesson/exercises/solutions per topic)
+topics/README.md  ← becomes the site's "Guide" page
+COMMANDS.md   ← becomes the site's "Commands" page (dotnet CLI cheat sheet)
+README.md     ← becomes the site's "Setup" page
+site/         ← Astro Starlight site that renders it all
+```
+
+- `site/scripts/sync-content.mjs` copies the markdown into `site/src/content/docs/` at build time, deriving the page title from the first `#` heading and adding sidebar order/labels (`lesson` → 1, `exercises` → 2, `solutions` → 3).
+- **Never edit `site/src/content/docs/topic-*` or the generated `guide.md`/`commands.md`/`setup.md`** — they're gitignored build artifacts; edit the files in `topics/` and the repo root instead. The only hand-maintained page in the content dir is `index.mdx` (the landing page).
+- Deployment: push to `main` → `.github/workflows/deploy.yml` builds and deploys to GitHub Pages. The Astro config's `base` is `/csharp-dotnet-recap` — internal links in `index.mdx` must use `${import.meta.env.BASE_URL}`.
+
+## Commands
+
+```bash
+cd site
+npm install          # first time (per global instructions: source ~/.zshrc first)
+npm run dev          # sync content + serve at localhost:4321
+npm run build        # sync content + production build (what CI runs)
+npm run og           # regenerate public/og.png from scripts/og-source.svg
+```
+
+There is no test suite; `npm run build` succeeding is the verification gate — run it after any content or config change.
+
+## Adding or renaming a topic
+
+A topic is a folder `topics/topic-N-<slug>/` containing exactly `lesson.md`, `exercises.md`, `solutions.md`. The sync script picks up `topic-*` folders automatically, but **two files reference topics by hand** and must be updated in the same change:
+
+1. `site/astro.config.mjs` — the sidebar group (`label` + `autogenerate.directory`)
+2. `site/src/content/docs/index.mdx` — the topic's `<LinkCard>`
+
+Topic cross-references inside lessons ("Topic 3", "Topic 7") are plain text — grep for the topic number when renumbering.
+
+## Content conventions (the important part)
+
+### The audience rule — compare against strict TypeScript, not plain JavaScript
+
+The reader is a strong TS developer. Never credit C# with catching something that **strict TS also catches at compile time** (typo'd properties, wrong argument types, unhandled null). The honest and correct framing: compile-time safety carries over ~1:1; the real differences are at **runtime**, where TS types are erased and trust-based while C# types are enforced. Comparisons to plain-JS *runtime semantics* (reference sharing, primitives copying) are fine — TS is JS at runtime.
+
+### Every concept maps to something the reader knows
+
+No C# construct is introduced cold. Each one gets its Node/TS anchor: `Task.FromResult` ≈ `Promise.resolve`, attributes ≈ NestJS decorators, `record` ≈ the missing object literal, EF Core ≈ Prisma, `[Theory]` ≈ `test.each`. When adding content, find the mapping first; if there is no equivalent (e.g. `out` params, `lock`, reified generics), say so explicitly — "no TS equivalent" is itself the teaching point.
+
+### The five-big-differences spine
+
+Every topic hangs off one of the five differences tabled in `topics/README.md` (runtime types, thread pool, nominal typing, typed exceptions, batteries+DI). New content should state which difference it belongs to and cross-reference related topics ("Topic 3's runtime types make Topic 5's DI possible").
+
+### Page structure
+
+- **`lesson.md`** — starts with `# Topic N: <name>`, then "The one question this topic answers" as a blockquote, then concepts (tables for comparisons, code with heavy comments), ends with **Interview talking points**.
+- **`exercises.md`** — numbered `Exercise N.M` sections; hands-on, incremental; Topics 1–4 use small console apps, Topics 5–7 extend the `LoanApp` API. Exercises should make the compiler/runtime *demonstrate* the lesson (e.g. produce the race condition, read the exact compiler error).
+- **`solutions.md`** — full working code per exercise plus the interview talking point it was secretly teaching.
+
+Code style in examples: money is always `decimal`, async methods end in `Async`, private fields `_camelCase`, comparisons presented as both bullets and a table when substantial.
+
+### The Loan Application domain
+
+All examples use the loan domain (`LoanApplication`, `CreateLoanRequest`, `Money`, applicants Alice/Bob/Cara, statuses Pending/Approved). Don't introduce unrelated example domains.
+
+### Accuracy notes
+
+- Content is written against **.NET 10** (SDK 10.x): file-scoped namespaces, top-level statements, single-file `dotnet run app.cs` + `#:package` (new in .NET 10 — flagged as such in Topic 1).
+- Exercise flows and error messages (exception types, `CSxxxx`/`TSxxxx` codes) are load-bearing teaching content — verify before changing them.
+
+**Markdown policy reminder:** only create or edit `.md` files when the user explicitly asks (per global instructions).

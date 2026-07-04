@@ -50,6 +50,32 @@ Here's the big mental shift: **you never import your own files.** Every `.cs` fi
 
 (The full cheat sheet is on the **Commands** page.)
 
+## NuGet — npm for .NET
+
+NuGet is the package ecosystem: [nuget.org](https://www.nuget.org) is the public registry, and the `dotnet` CLI is the client (there's no separate `npm`-style tool to install). The pieces map one-to-one:
+
+| Node world | .NET world |
+|---|---|
+| npm registry (npmjs.com) | NuGet registry (nuget.org) |
+| `dependencies` in `package.json` | `<PackageReference>` entries in the `.csproj` |
+| `npm install lodash` | `dotnet add package Humanizer` |
+| `package-lock.json` | `packages.lock.json` (opt-in — exact versions in the `.csproj` usually suffice) |
+| `node_modules/` per project | one global cache: `~/.nuget/packages`, shared by every project |
+| `npm install` after clone | nothing — restore runs automatically inside `dotnet build` / `dotnet run` |
+
+Running `dotnet add package Humanizer` edits the `.csproj` for you:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Humanizer" Version="2.14.1" />
+</ItemGroup>
+```
+
+Two differences worth internalizing:
+
+- **One cache per machine, not one folder per project.** Each package version downloads once into `~/.nuget/packages`; every project references it from there at build time. No 500 MB folder to delete, nothing package-related to `.gitignore`, and cloning a repo is instant because dependencies were never in it.
+- **Packages ship compiled, not as source.** A `.nupkg` is a zip of already-compiled DLLs plus metadata. There's no install-time build/transpile step (and no `postinstall` scripts) — the compiler just links against the assembly.
+
 ## Single-file scripts — the `node script.js` experience
 
 You always need the SDK installed (C# has no pre-installed runtime, same as JS needs Node), but since .NET 10 you **don't** need a project. A single `.cs` file runs directly:

@@ -57,10 +57,12 @@ No C# construct is introduced cold. Each one gets its Node/TS anchor: `Task.From
 
 Every topic hangs off one of the five differences tabled in `topics/README.md` (runtime types, thread pool, nominal typing, typed exceptions, batteries+DI). New content should state which difference it belongs to and cross-reference related topics ("Topic 3's runtime types make Topic 5's DI possible").
 
-### Page structure
+### Page structure — and the role split (load-bearing)
 
-- **`lesson.md`** — starts with `# Topic N: <name>`, then "The one question this topic answers" as a blockquote, then concepts (tables for comparisons, code with heavy comments), ends with **Interview talking points**.
-- **`exercises.md`** — titled `# Topic N: Exercises & Solutions`; Topics 5–9 open with the build-line banner blockquote. Numbered `Exercise N.M` sections: the task first, then a `**Solution**` block with full working code, expected output/errors, and the explanation + interview talking point it was secretly teaching. Exercises should make the compiler/runtime *demonstrate* the lesson (produce the race, read the exact compiler error, watch the 401 become a 403).
+The two pages have **different jobs**, and content must respect the split:
+
+- **`lesson.md` — where the real code lives.** The topic's new machinery (every new file of the app) is *built* here, explained line by line; the reader types it in as they read. Starts with `# Topic N: <name>`, then "The one question this topic answers" as a blockquote, then concepts (tables for comparisons, code with heavy comments), ends with **Interview talking points**.
+- **`exercises.md` — validation, never the primary build.** Drills that prove, break, and stress what the lesson built (produce the race, read the exact compiler error, watch the 401 become a 403); at most one small feature extension. If new core machinery is needed, it goes in the lesson, not an exercise. Titled `# Topic N: Exercises & Solutions`; Topics 5–10 open with the build-line banner blockquote. Numbered `Exercise N.M` sections: the task first, then a `**Solution**` block with full working code, expected output/errors, and the explanation + interview talking point it was secretly teaching.
 
 Code style in examples: money is always `decimal`, async methods end in `Async`, private fields `_camelCase`, comparisons presented as both bullets and a table when substantial.
 

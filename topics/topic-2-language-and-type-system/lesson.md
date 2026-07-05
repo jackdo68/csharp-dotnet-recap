@@ -248,6 +248,19 @@ public class LoanApplication { /* ... */ }
 
 `namespace X;` puts every type in the file into that named group; other files say `using LoanApp.Models;` to see them — the *namespace*, never a file path. Conventions: namespace mirrors the folder (`Models/` → `LoanApp.Models`), one public type per file, file named after the type.
 
+### Why split `Models` / `Services` / `Controllers` at all?
+
+First, the surprising part: **the compiler doesn't care about folders.** Namespaces are purely logical names — you could put `namespace PaymentApp.Services;` in a file at the project root, or dump every type into one giant namespace, and everything would compile identically. The folder-mirrors-namespace rule is convention. So why does every .NET codebase follow it?
+
+- **The `using` list becomes an architecture diagram.** Open any file in the API you'll build in Topic 5 and read its top lines: the service says `using PaymentApp.Data;` and `using PaymentApp.Models;` (touches the database, uses domain types); a model file has *no* usings at all. Granular namespaces make dependencies visible and directional — if someone adds `using PaymentApp.Controllers;` to a model, the layering violation is legible in one line during code review. A single flat namespace erases this signal: everything sees everything, silently.
+- **Full name tells you the file path.** `PaymentApp.Services.PaymentService` → `Services/PaymentService.cs`. In an unfamiliar 400-project codebase, that predictability is how you navigate — and it only works because everyone keeps the mirror intact.
+- **Tooling assumes it.** IDEs generate the namespace from the folder when you create a file, and analyzer rule **IDE0130** flags mismatches. Convention with guardrails.
+- **Smaller import surfaces.** A `using` pulls in a whole namespace — every type *and every extension method* in it. Splitting keeps a file that only needs models from having service types pollute its IntelliSense and overload resolution.
+
+The TS mapping makes the difference crisp: in Node, the **file path *is* the module identity** — `import { PaymentService } from './services/payment'` couples logical name to physical location by construction. C# fully decouples them, then the convention re-couples them for the humans. A namespace is roughly a barrel file (`services/index.ts`) — one name importing a curated group — except automatic, with no `export * from` to maintain.
+
+(Honest footnote: in a five-file console app, one namespace is fine. The split earns its keep as projects grow — and since every codebase you'll join does it, this course does it from the first API file so the muscle memory is right.)
+
 ## The philosophy split: nominal typing, not structural
 
 TS is structural — "static duck typing": anything with the right properties *is* the type, no matter how it was declared. C# is nominal: compatibility comes from the **declared name and declared relationships**, and two types with byte-for-byte identical shapes are still completely unrelated.

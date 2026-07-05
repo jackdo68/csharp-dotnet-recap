@@ -37,6 +37,7 @@ export default defineConfig({
         { label: 'Topic 5 · Web API & Dependency Injection', items: [{ autogenerate: { directory: 'topic-5-web-api-and-di' } }] },
         { label: 'Topic 6 · Data Access & Testing', items: [{ autogenerate: { directory: 'topic-6-data-access-and-testing' } }] },
         { label: 'Topic 7 · Concurrency & Threading', items: [{ autogenerate: { directory: 'topic-7-concurrency-and-threading' } }] },
+        { label: 'Topic 8 · Production: Build, Ship, Run', items: [{ autogenerate: { directory: 'topic-8-production-build-ship-run' } }] },
       ],
     }),
   ],

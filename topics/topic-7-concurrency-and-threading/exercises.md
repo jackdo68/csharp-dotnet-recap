@@ -107,4 +107,4 @@ If the service used `.Result`: you're courting **thread-pool starvation**. Each 
 
 ---
 
-**Course complete.** Re-read the five big differences in the [Guide](../../guide/) and say each one out loud with the example you just built. That's the interview prep.
+One topic left: the code works — now **Topic 8** ships it. Docker, Kubernetes, and the "when Node, when .NET" answer you'll actually be asked.

@@ -24,16 +24,16 @@ Everything in this course hangs off five differences. Burn these in — they're 
 | 2 | A **thread pool**, not an event loop | underlying operation | Topic 7 |
 | 3 | **Nominal** typing, not structural | language philosophy | Topic 2 |
 | 4 | **Typed exceptions**, not sentinels | failure philosophy | Topic 4 |
-| 5 | **Batteries included + DI**, not assemble-it-yourself | ecosystem philosophy | Topics 5–6 |
+| 5 | **Batteries included + DI**, not assemble-it-yourself | ecosystem philosophy | Topics 5–6, 8 |
 
-Topic 1 (platform & tooling) is the vocabulary you need before any of them.
+Topic 1 (platform & tooling) is the vocabulary you need before any of them. Topic 8 (production) is where differences #2 and #5 prove out in Docker and Kubernetes — and where you earn the "when Node, when .NET" answer.
 
 ## The practice loop
 
 Each topic has two pages:
 
 1. **Lesson** — the concepts, every one mapped back to what you know from Node/TS. Read it top to bottom.
-2. **Exercises & Solutions** — hands-on tasks, each followed by its solution: full working code plus the interview talking point it was secretly teaching. Topics 1–4 use small console programs; Topics 5–7 build and extend a real **Loan Application API** (the same app grows across the topics). Attempt each exercise before reading its solution — the differences only stick when the compiler yells at you.
+2. **Exercises & Solutions** — hands-on tasks, each followed by its solution: full working code plus the interview talking point it was secretly teaching. Topics 1–4 use small console programs; Topics 5–8 build, extend, and finally ship a real **Loan Application API** (the same app grows across the topics). Attempt each exercise before reading its solution — the differences only stick when the compiler yells at you.
 
 Don't copy-paste the code. Type it. The muscle memory of `{ get; set; }`, `:` for inheritance, and attribute brackets is half the value.
 
@@ -41,7 +41,7 @@ Don't copy-paste the code. Type it. The muscle memory of `{ get; set; }`, `:` fo
 
 - **Day 1:** Topics 1–4 (tooling, language, runtime types, errors). All console apps, fast feedback.
 - **Day 2:** Topics 5–6 (the Web API with DI, then EF Core + tests). This is the "real .NET developer" day.
-- **Day 3 (or the evening of Day 2):** Topic 7 (threading — the biggest genuine difference), then re-read the five differences table above and say each one out loud with an example. That's your interview prep.
+- **Day 3 (or the evening of Day 2):** Topic 7 (threading — the biggest genuine difference), then Topic 8 (ship it: publish, Docker, Kubernetes, and the when-Node-when-.NET answer). Finish by re-reading the five differences table above and saying each one out loud with an example. That's your interview prep.
 
 ## Saying it in an interview
 

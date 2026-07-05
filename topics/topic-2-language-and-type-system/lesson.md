@@ -93,7 +93,7 @@ Every construct above that has no TS equivalent, mapped to what you know:
 - **LINQ** — `.Where`/`.Select`/`.Sum`/`.Aggregate` = `.filter`/`.map`/`.reduce`. Also `.FirstOrDefault(pred)` = `.find(pred)`, `.OrderByDescending(...)` = sort. Same idea, different names — you'll be fluent in an hour. (Full vocabulary and the two things it does that array methods can't: two sections down.)
 - **`Task` vs `Promise`** — same concept: `Task` = `Promise<void>`, `Task<T>` = `Promise<T>`. Async method names end in `Async` by convention.
 - **Local functions** — a function declared mid-file works like a hoisted named `function` in JS: callable before its declaration.
-- **Value types vs reference types** — `int`, `bool`, `decimal`, `struct` are *value types*: assignment copies (like JS primitives). `class` instances are *reference types*: assignment shares (like JS objects). Matters for threading (Topic 7) and `int?`.
+- **Value types vs reference types** — `int`, `bool`, and `decimal` above are *value types*: assignment copies (like JS primitives). `class` instances are *reference types*: assignment shares (like JS objects). Matters for threading (Topic 7) and `int?`. (You can also declare your own value types with `struct` — unpacked three sections down.)
 
 ## Properties unpacked — what `{ get; set; }` actually is
 
@@ -183,6 +183,60 @@ In JS, each `.filter().map()` step eagerly allocates a whole intermediate array.
 
 One curiosity you'll see in older code: LINQ also has a SQL-ish *query syntax* — `from a in apps where a.Amount > 500_000 select a.ApplicantName`. It compiles to exactly the method calls above; modern codebases overwhelmingly use method syntax, so read it if you meet it, don't write it.
 
+## Structs unpacked — your own value types
+
+`struct` declares **your own value type** — your own `int`, essentially. Same syntax as a class, opposite assignment semantics. This one has **no TS equivalent at all**: in JS the set of "things that copy" (primitives) is fixed forever; C# lets you add to it.
+
+```csharp
+// A struct: a VALUE type you define yourself
+struct InterestRate
+{
+    public decimal Percent { get; set; }
+}
+
+// A class: a REFERENCE type (same body!)
+class InterestRateClass
+{
+    public decimal Percent { get; set; }
+}
+```
+
+```csharp
+// ---- struct: assignment COPIES (like a JS number) ----
+var rate = new InterestRate { Percent = 5.75m };
+var copy = rate;                 // a full copy — two independent values now exist
+copy.Percent = 9.99m;
+Console.WriteLine(rate.Percent); // 5.75  — the original never felt it
+
+// ---- class: assignment SHARES (like a JS object) ----
+var rateC = new InterestRateClass { Percent = 5.75m };
+var alias = rateC;               // both variables point at ONE object
+alias.Percent = 9.99m;
+Console.WriteLine(rateC.Percent); // 9.99 — "copy" was never a copy
+```
+
+The class behavior is exactly the JS bug you've hunted before — mutating what you thought was a copy. The struct version is immune by construction: there's no sharing to leak through.
+
+One level deeper: a struct's data lives *inline* — inside the variable, the array slot, or the containing object — rather than as a pointer to a separate heap allocation. Consequences: no garbage-collector pressure, and an `InterestRate[1_000_000]` is one contiguous block of memory instead of a million scattered objects. Structs can't participate in inheritance, and can't be `null` — unless you write `InterestRate?`, which is the same `Nullable<T>` mechanism as `int?`.
+
+**The plot twist:** you've been using structs all along. `int`, `bool`, `decimal`, `DateTime`, `TimeSpan`, `Guid` — all structs. That's *why* they copy like primitives. "Primitive" isn't a special category in C#; it's just "small struct from the standard library."
+
+When to reach for each:
+
+| Reach for | When |
+|---|---|
+| `class` | identity + changing state — a `LoanApplication` whose `Status` moves through a workflow |
+| `record` | data that flows — DTOs, requests; you want value *equality* and immutability |
+| `struct` | tiny, immutable, primitive-like values used in bulk — a rate, a coordinate, a date range; or hot paths where allocation shows up in profiling |
+
+Honest guidance: **you'll rarely write one.** Web API code defaults to classes and records; structs are a performance and semantics tool, and the ones you need daily (`DateTime`, `decimal`, `Guid`) already exist. Microsoft's own rule of thumb: small (≤ ~16 bytes), immutable, logically a single value. If you do write one, the modern spelling is the immutable combo:
+
+```csharp
+readonly record struct InterestRate(decimal Percent);   // value type + value equality + immutable
+```
+
+One footgun worth naming: **mutable structs**. Because every assignment copies, mutating a struct you got *from* somewhere (a list element, a property getter) often mutates a temporary copy that's instantly discarded — the change silently vanishes. That's why the guidance is always "structs should be immutable," and why the example above only mutated local variables.
+
 ## Namespaces — how code finds other code
 
 ```csharp
@@ -212,3 +266,4 @@ One more TS habit to drop: C# interfaces are used almost only as *behaviour cont
 - `decimal` for money — never `float`/`double`. Saying this unprompted signals fintech experience.
 - Nominal vs structural: "TS asks *does it have the right shape?* C# asks *did you declare it as that thing?*" — and the branded-types-for-free upside.
 - The `:` symbol is both `extends` and `implements`: base class first, then interfaces.
+- "`decimal` and `DateTime` are structs — value types I could have defined myself. C# doesn't have a magic 'primitive' category like JS; it has value types vs reference types, and `struct` vs `class` is how you pick a side."

@@ -1,26 +1,29 @@
 # Topic 5: Exercises & Solutions
 
-> **The PaymentApp build:** **Topic 5 (you are here): the API is born, in-memory** → Topic 6 Postgres + tests → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
+> **The PaymentApp build:** **Topic 5 (you are here): the API is born — straight onto Postgres** → Topic 6 EF Core unpacked + tests → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
 
 Build the API from the lesson first (type it in, don't paste), then extend it. Try each exercise before reading its solution. Budget ~90 minutes for the build plus all four exercises.
 
 ## Exercise 5.0 — Build the lesson's API, in dependency order
 
-Scaffold (`dotnet new webapi --use-controllers -n PaymentApp`, delete the WeatherForecast files, add the `Microsoft.Extensions.Identity.Core` package), then type the lesson's files **bottom of the dependency chain upward** — each file only references files that already exist:
+Scaffold (`dotnet new webapi --use-controllers -n PaymentApp`, delete the WeatherForecast files, add the three packages), write the compose file, `docker compose up -d`, then type the lesson's files **bottom of the dependency chain upward** — each file only references files that already exist:
 
 1. `Models/User.cs` and `Models/Account.cs` — the entities
 2. `Models/Requests.cs` — the DTOs (records: `RegisterRequest`, `TransferRequest`, `UserResponse`)
-3. `Services/IPaymentService.cs` — the contract
-4. `Services/PaymentService.cs` — the in-memory implementation
-5. `Controllers/UsersController.cs`, `AccountController.cs`, `PaymentsController.cs`
-6. `Program.cs` — the DI registrations
+3. `Data/PaymentDbContext.cs` — the database session (minimal; Topic 6 unpacks it)
+4. `Services/IPaymentService.cs` — the contract
+5. `Services/PaymentService.cs` — the implementation, against the real database
+6. `Controllers/UsersController.cs`, `AccountController.cs`, `PaymentsController.cs`
+7. `Program.cs` — the DI registrations
+
+Then the schema cookbook (`dotnet ef migrations add InitialCreate` + `dotnet ef database update` — Topic 6 explains what just happened) and `dotnet run`.
 
 Two checkpoints while typing:
 
 - After each file, glance at the Problems panel. Forget `using PaymentApp.Models;` in the interface file and you get **CS0246: The type or namespace name 'User' could not be found** — fixing these as you go teaches the namespace system faster than reading about it.
-- The lines that make everything work are the two `AddSingleton` registrations — read the first one aloud as *"when anyone asks for `IPaymentService`, hand them the one shared `PaymentService`."*
+- Read the `AddScoped` registration aloud as *"when anyone asks for `IPaymentService`, hand them a `PaymentService` — a fresh one per request."*
 
-Finish with `dotnet run`, note the port (use it wherever the exercises say `PORT`), and leave it running — every exercise below happens against the live app from a second terminal.
+Note the port from `dotnet run` (use it wherever the exercises say `PORT`), and leave the app running — every exercise below happens against the live app from a second terminal.
 
 ## Exercise 5.1 — Prove it works
 
@@ -41,6 +44,7 @@ curl http://localhost:PORT/v1/account/2/balance     # 1000
 
 2. Transfer $250 from Alice (user 1) to Bob (user 2), and confirm both balances moved.
 3. Break it four ways and note the status code of each: transfer to user 999; transfer with a negative amount; transfer more than Alice has; transfer with `"amount":"heaps"`. **Which of the four responses came from *your* code, and which came from the platform?**
+4. One more that in-memory apps can't do: `Ctrl+C` the app, start it again, and read Alice's balance. Where does the state actually live?
 
 **Solution**
 
@@ -68,22 +72,37 @@ curl http://localhost:PORT/v1/account/2/balance     # 1250
 
 The last row is the one to internalize: Topic 4's boundary enforcement rejected the payload before routing even reached your action. You wrote zero validation code for it.
 
-## Exercise 5.2 — Break it with the wrong lifetime
+4. Balances survive the restart because state lives in **Postgres**, not in any C# object — the service instance that handled the transfer was garbage-collected long ago; only rows remain. This is *why* `AddScoped` is the right lifetime here: a fresh service per request is fine when the service holds no state of its own. (Topic 6's exercises push this further: the data even survives killing the database *container*.)
 
-1. Change the `IPaymentService` registration to `AddScoped`. Restart, register Alice (note the 201!), then immediately check her balance. What happens, and why exactly?
-2. Now reason: with `AddSingleton`, the controller is still created per request — so why does the data survive?
-3. Put it back to `AddSingleton`. In one sentence each, name a dependency you'd register as scoped, transient, and singleton in a real service.
+## Exercise 5.2 — Break the lifetimes: the captive dependency
+
+The lesson claimed "a service's lifetime is bounded by its shortest-lived dependency." Prove the container enforces it:
+
+1. Change the service registration to `AddSingleton<IPaymentService, PaymentService>();` and restart. What happens — and *when* does it happen (first request, or earlier)?
+2. Read the error aloud and explain in your own words *why* this combination is dangerous enough to refuse outright. What would actually go wrong if the container allowed it?
+3. Revert to `AddScoped`. Then, for the interview: one sentence each on a dependency you'd register as scoped, transient, and singleton in a real service.
 
 **Solution**
 
-1. Registration succeeds (201), then `GET /v1/account/1/balance` returns **404** — Alice is *gone*. `AddScoped` = one instance per HTTP request: the register request got a fresh `PaymentService` (empty lists), added Alice, returned — and that instance became garbage when the request ended. The balance request got its *own* fresh, empty bank. Two requests, two services, two banks.
-2. With `AddSingleton`, controllers are still built per request, but the container hands *every* controller the **same one** `PaymentService` — the controller is disposable; its dependency is shared. Lifetime is a property of each registration, not of the request pipeline.
-3. Typical answers:
-   - **Scoped:** the EF Core `DbContext` — one unit-of-work per request (Topic 6).
-   - **Transient:** a cheap, stateless helper — a validator or a `FeeCalculator`.
-   - **Singleton:** something expensive and thread-safe shared by everyone — an `HttpClient`-based API client, a cache, configuration. (The password hasher you registered is exactly this: stateless, safe to share.)
+1. The app **refuses to start** — no request needed:
 
-**Talking point:** "a singleton holding per-request state" is the classic DI bug — you just built its inverse (scoped holding app-wide state) on purpose. Interviewers love this story.
+```
+System.AggregateException: Some services are not able to be constructed
+ ---> InvalidOperationException: Cannot consume scoped service
+      'PaymentApp.Data.PaymentDbContext' from singleton
+      'PaymentApp.Services.IPaymentService'.
+```
+
+The container validates the whole dependency graph at startup (in the Development environment) and rejects the lifetime mismatch before it can hurt anyone. Compare the Node equivalent: nothing stops a module-level singleton from capturing a per-request object — you find out in production, via weirdness.
+
+2. A singleton lives forever; a scoped `DbContext` is one request's database session. If the container allowed the capture, the *first* request's DbContext would secretly become the *app-wide* one: its change-tracker accumulating every entity ever touched (a memory leak with a business model), stale reads served forever, and — because `DbContext` is not thread-safe — concurrent requests corrupting each other through it (Topic 7 gives you the vocabulary for how bad that gets). This failure mode has a name — a **captive dependency** — and "the DI container validates the graph at startup" is the .NET-specific fact worth saying in an interview.
+
+3. Typical answers:
+   - **Scoped:** the EF Core `DbContext` — one unit-of-work per request; you're living this choice already.
+   - **Transient:** a cheap, stateless helper — a validator or a `FeeCalculator`.
+   - **Singleton:** something stateless/thread-safe shared by everyone — your `PasswordHasher`, an `HttpClient`-based API client (Topic 10), a cache, configuration.
+
+**Talking point:** the classic DI bug family is "long-lived thing holding short-lived state" — a singleton with per-request state, or a singleton capturing a scoped dependency. You've now watched the container refuse the second one at startup, which is a story most candidates can't tell.
 
 ## Exercise 5.3 — The deposit endpoint
 
@@ -107,13 +126,14 @@ Task<decimal> DepositAsync(int userId, decimal amount);
 `Services/PaymentService.cs` — add:
 
 ```csharp
-public Task<decimal> DepositAsync(int userId, decimal amount)
+public async Task<decimal> DepositAsync(int userId, decimal amount)
 {
     if (amount <= 0) throw new ArgumentException("Amount must be positive.");
-    var account = _accounts.FirstOrDefault(a => a.UserId == userId)
+    var account = await _db.Accounts.FirstOrDefaultAsync(a => a.UserId == userId)
         ?? throw new KeyNotFoundException($"No account for user {userId}.");
-    account.Balance += amount;
-    return Task.FromResult(account.Balance);
+    account.Balance += amount;          // mutate the tracked entity...
+    await _db.SaveChangesAsync();       // ...EF writes the UPDATE (Topic 6: change tracking)
+    return account.Balance;
 }
 ```
 

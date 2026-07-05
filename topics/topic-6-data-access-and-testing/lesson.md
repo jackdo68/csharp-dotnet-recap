@@ -1,12 +1,12 @@
-# Topic 6: Data Access & Testing — EF Core and xUnit
+# Topic 6: Data Access & Testing — EF Core Unpacked, plus xUnit
 
 ## The one question this topic answers
 
-> **How does the standard .NET data layer work, and how does DI make it testable?**
+> **What is EF Core actually doing under those two migration commands — and how does DI make the data layer testable?**
 
-Right now the payment service forgets every user and balance on restart. We swap in **EF Core** (the Prisma/Sequelize of .NET) backed by **PostgreSQL in Docker** — and because the controllers depend on `IPaymentService`, not the implementation, the controllers don't change at all. Then we prove the DI payoff by testing the service against a fake database.
+Topic 5 wired the database in cookbook-style: a minimal `DbContext`, two magic `dotnet ef` commands, and a service that mutates objects and calls `SaveChangesAsync`. It all works — and you can't yet explain *why*. This topic opens the hood: the `DbContext`, change tracking, what a migration file contains, how LINQ becomes SQL — and then cashes in the `IPaymentService` interface by testing the money logic against a fake database.
 
-**You arrive with:** Topic 5's `PaymentApp` — register, balance, transfer, deposit, all in-memory singletons. **You leave with:** the same API persisting `Users` and `Accounts` to Postgres, back on the normal `AddScoped` lifetime, with a test project proving the money logic.
+**You arrive with:** a running Postgres-backed `PaymentApp` you can operate but not fully explain. **You leave with:** the mental model for every line of the data layer, a unique-email constraint you added yourself, and a test project proving the money logic — no Docker required to run it.
 
 ## EF Core in one mapping
 
@@ -16,182 +16,94 @@ Right now the payment service forgets every user and balance on restart. We swap
 | `PrismaClient` | `DbContext` |
 | `prisma.user` / `prisma.account` | `DbSet<User>` / `DbSet<Account>` |
 | `prisma migrate dev` | `dotnet ef migrations add` + `database update` |
-| `@unique` | an index in `OnModelCreating` |
+| `@unique` | an index in `OnModelCreating` (you'll add one below) |
+| `update({ where, data })` | mutate the tracked entity + `SaveChangesAsync` (change tracking) |
 | generated client types | none needed — the models are already typed |
 
-## Wire it up
+## The DbContext, unpacked
 
-### The database — `docker-compose.yml`
-
-Same move you'd make for local Prisma development: don't install Postgres, *compose* it. Create `docker-compose.yml` inside `PaymentApp/`:
-
-```yaml
-services:
-  db:
-    image: postgres:17
-    environment:
-      POSTGRES_USER: payapp
-      POSTGRES_PASSWORD: devpass
-      POSTGRES_DB: payapp
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data   # data survives container restarts
-
-volumes:
-  pgdata:
-```
-
-```bash
-docker compose up -d     # start it in the background; `docker compose down` stops it
-```
-
-Nothing .NET-specific here — it's the identical compose file a Node team would use. Topic 8 grows it a second service (the API itself).
-
-### Packages
-
-```bash
-cd PaymentApp
-dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
-dotnet add package Microsoft.EntityFrameworkCore.Design
-```
-
-(Npgsql is the Postgres driver + EF provider — the `pg` of .NET. Swapping databases means swapping this package and one line in `Program.cs`; everything else in this topic is provider-agnostic.)
-
-### The DbContext — `Data/PaymentDbContext.cs`
+Re-read Topic 5's `PaymentDbContext` with fresh eyes:
 
 ```csharp
-using Microsoft.EntityFrameworkCore;
-using PaymentApp.Models;
-
-namespace PaymentApp.Data;
-
 public class PaymentDbContext : DbContext
 {
     public PaymentDbContext(DbContextOptions<PaymentDbContext> options) : base(options) { }
 
-    // Each DbSet is a table.
     public DbSet<User> Users => Set<User>();
     public DbSet<Account> Accounts => Set<Account>();
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        // Prisma's @unique, spelled as a fluent configuration.
-        modelBuilder.Entity<User>().HasIndex(u => u.Email).IsUnique();
-    }
 }
 ```
 
-New syntax:
+- **`DbContext` = one unit of work.** It's a database session that *remembers every entity it has handed you* (the change tracker). That memory is why it's registered **scoped** — one per request — and why the captive-dependency crash from exercise 5.2 exists: an app-wide session would remember everything forever.
+- **`Set<User>()`** is Topic 3's reified generics doing real work: the type argument locates the table mapping at runtime. `Users` → table `"Users"` purely by convention; `Id` → identity primary key, also by convention.
+- **Change tracking is the Prisma difference to internalize.** In Topic 5's transfer you wrote `payer.Balance -= amount;` — a plain property mutation, no ORM call — and then one `SaveChangesAsync()`. At save time EF *diffs* every tracked entity against the snapshot it took when handing them out, and emits exactly the `UPDATE` statements needed, wrapped in a transaction. Prisma makes you *declare* the write (`update({ where, data })`); EF *observes* it. Both models are fine; confusing them is how you write EF code that saves nothing (mutating an entity the context never tracked).
 
-- `: base(options)` — calls the parent constructor: `super(options)`, written in the signature.
-- `=> Set<User>()` — an **expression-bodied member**: a read-only property computed by the right-hand expression. `Set<T>()` is Topic 3's reified generics doing real work — the type argument locates the table at runtime.
-- `OnModelCreating` — the escape hatch for anything the class shapes can't say on their own (unique indexes, composite keys, relations). The 90% case needs nothing here; the unique email is our one rule.
+## Migrations, unpacked
 
-### The service, rewritten — `Services/PaymentService.cs`
+Open `Migrations/` — the folder Topic 5 told you to ignore. Inside `*_InitialCreate.cs`:
 
 ```csharp
-using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Identity;
-using PaymentApp.Data;
-using PaymentApp.Models;
-
-namespace PaymentApp.Services;
-
-public class PaymentService : IPaymentService
+public partial class InitialCreate : Migration
 {
-    private readonly PaymentDbContext _db;
-    private readonly IPasswordHasher<User> _hasher;
-
-    // The DbContext is itself injected via DI — dependencies all the way down.
-    public PaymentService(PaymentDbContext db, IPasswordHasher<User> hasher)
+    protected override void Up(MigrationBuilder migrationBuilder)      // apply
     {
-        _db = db;
-        _hasher = hasher;
+        migrationBuilder.CreateTable(
+            name: "Users",
+            columns: table => new
+            {
+                Id = table.Column<int>(type: "integer", nullable: false)
+                    .Annotation("Npgsql:ValueGenerationStrategy",
+                                NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                Name = table.Column<string>(type: "text", nullable: false),
+                // ...
+            });
+        // ... Accounts table ...
     }
 
-    public async Task<User> RegisterAsync(RegisterRequest request)
+    protected override void Down(MigrationBuilder migrationBuilder)    // revert
     {
-        var user = new User { Name = request.Name, Email = request.Email };
-        user.PasswordHash = _hasher.HashPassword(user, request.Password);
-        _db.Users.Add(user);
-        await _db.SaveChangesAsync();            // commit -> EF fills user.Id
-
-        _db.Accounts.Add(new Account { UserId = user.Id, Balance = 1000m });
-        await _db.SaveChangesAsync();
-        return user;
-    }
-
-    public async Task<decimal?> GetBalanceAsync(int userId)
-    {
-        var account = await _db.Accounts.FirstOrDefaultAsync(a => a.UserId == userId);
-        return account?.Balance;
-    }
-
-    public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount)
-    {
-        if (amount <= 0)
-            throw new ArgumentException("Amount must be positive.");
-
-        var payer = await _db.Accounts.FirstOrDefaultAsync(a => a.UserId == payerUserId)
-            ?? throw new KeyNotFoundException($"No account for user {payerUserId}.");
-        var payee = await _db.Accounts.FirstOrDefaultAsync(a => a.UserId == payeeUserId)
-            ?? throw new KeyNotFoundException($"No account for user {payeeUserId}.");
-
-        if (payer.Balance < amount)
-            throw new InvalidOperationException("Insufficient funds.");
-
-        // Read-check-modify, now across TWO HTTP requests' worth of time
-        // (SELECT ... then UPDATE). Still racy — Topic 7 makes it lose money
-        // on purpose, then fixes it.
-        payer.Balance -= amount;
-        payee.Balance += amount;
-        await _db.SaveChangesAsync();            // one commit for both rows
-    }
-
-    public async Task<decimal> DepositAsync(int userId, decimal amount)
-    {
-        if (amount <= 0) throw new ArgumentException("Amount must be positive.");
-        var account = await _db.Accounts.FirstOrDefaultAsync(a => a.UserId == userId)
-            ?? throw new KeyNotFoundException($"No account for user {userId}.");
-        account.Balance += amount;
-        await _db.SaveChangesAsync();
-        return account.Balance;
+        migrationBuilder.DropTable(name: "Users");
+        // ...
     }
 }
 ```
 
-Note the controllers didn't change a character — the interface held. And note EF's change tracking: you mutate `payer.Balance` like a plain object, and `SaveChangesAsync` figures out the `UPDATE` statements. Prisma makes you say `update({ where, data })`; EF watches what you touched.
+The anatomy:
 
-### Registration — `Program.cs`
+- **`Up`/`Down`** — apply and revert, as reviewable C# (Prisma's analogue is the SQL files in `prisma/migrations/`, minus generated rollbacks). These are checked into git; a schema change is a PR like any other.
+- **Where did the column types come from?** Your properties, read by reflection (Topic 3): `string` → `text`, `int` → `integer` + identity, `decimal` → `numeric`. No schema file exists anywhere — the classes are the source of truth, and `migrations add` *diffs your classes against a snapshot* (`PaymentDbContextModelSnapshot.cs`, also in that folder) to compute the delta.
+- **`database update`** runs every not-yet-applied migration, tracked in the `__EFMigrationsHistory` table — which is how the same command is a no-op on an up-to-date database and a full build on an empty one.
+
+## Make the schema yours — a constraint the classes can't express
+
+Rule: emails must be unique. A C# property can't say that (it's a fact about the *table*, not one object), so it goes in `OnModelCreating` — the escape hatch for everything class shapes can't state:
 
 ```csharp
-// Register EF Core against the composed Postgres
-builder.Services.AddDbContext<PaymentDbContext>(options =>
-    options.UseNpgsql("Host=localhost;Database=payapp;Username=payapp;Password=devpass"));
-
-// Back to Scoped (the normal choice): the database owns the data now,
-// and DbContext is itself scoped per request.
-builder.Services.AddScoped<IPaymentService, PaymentService>();
+// in PaymentDbContext:
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    // Prisma's @unique, spelled as fluent configuration.
+    modelBuilder.Entity<User>().HasIndex(u => u.Email).IsUnique();
+}
 ```
 
-The Topic 5 lifetime story resolves: the in-memory singleton becomes the standard scoped service, because state now lives in the database and `DbContext` is scoped (one unit-of-work per request).
-
-(Hardcoding the connection string is deliberate for now — Topic 8 moves it into config and overrides it per environment. One concept at a time.)
-
-### Migrations
-
-Make sure the database is up (`docker compose up -d`), then:
+Then the round-trip you now understand:
 
 ```bash
-dotnet tool install --global dotnet-ef    # one-time
-dotnet ef migrations add InitialCreate    # generate from your models
-dotnet ef database update                 # apply -> creates Users + Accounts in Postgres
+dotnet ef migrations add AddUserEmailUniqueIndex   # diff -> a tiny Up/Down pair
+dotnet ef database update                          # CREATE UNIQUE INDEX ...
 ```
 
-A migration is a versioned schema change, like `prisma migrate` — except the source of truth is your C# classes, read by reflection. Look inside `Migrations/`: the generated code is C#, readable, and checked into git.
+Why a database constraint instead of checking in C# (`Users.AnyAsync(u => u.Email == ...)` before insert)? Because check-then-insert is **two steps** — two simultaneous registrations can both pass the check, then both insert. The unique index is the only arbiter that acts *atomically at the moment of write*. Hold that sentence; Topic 7 generalizes it into the course's biggest lesson.
 
-**LINQ-to-SQL:** `_db.Accounts.Where(a => a.Balance > 10_000)` doesn't filter in memory — EF translates the *expression* into `WHERE "Balance" > 10000` and runs it in the database. Same LINQ surface as Topic 2's lists, radically different execution.
+## LINQ-to-SQL — same surface, different engine
+
+```csharp
+_db.Accounts.Where(a => a.Balance > 10_000)   // does NOT filter in memory
+// EF translates the expression tree -> SQL:  WHERE "Balance" > 10000
+```
+
+Same LINQ you learned on `List<T>` in Topic 2 — but against a `DbSet`, the lambda is captured as an **expression tree** (Topic 3's runtime types again) and compiled to SQL; only matching rows cross the wire. The placement rule that follows: `.Where(...).ToListAsync()` filters in the database; `.ToListAsync()` then `.Where(...)` fetches *every row* and filters in memory — same result, catastrophically different at scale, and the classic EF code-review catch.
 
 ## Testing — where DI pays out
 
@@ -278,14 +190,15 @@ dotnet test
 
 xUnit mapped to jest: no `describe`/`it` nesting — the **class is the suite**, each `[Fact]` method is a test, the method name is the test name (hence the long descriptive names). Parameterised tests use `[Theory]` + `[InlineData(...)]` (jest's `test.each`). `Assert.ThrowsAsync<T>` is `expect().rejects.toThrow()`, except it asserts the exception *type* — Topic 4's typed failures making tests sharper.
 
-Note what the in-memory provider buys you: `dotnet test` passes with Postgres **down** — unit tests have no Docker dependency. (The trade-off: it's not real SQL, so it won't catch provider-specific issues or — important for Topic 7 — real locking behaviour; integration tests against real Postgres exist for that, one rung up the ladder.)
+Note what the in-memory provider buys you: `dotnet test` passes with Postgres **down** — unit tests have no Docker dependency. (The trade-off: it's not real SQL, so it won't catch provider-specific issues, the unique index, or — important for Topic 7 — real locking behaviour; integration tests against real Postgres exist for that, one rung up the ladder.)
 
-The punchline: `PaymentService` never knew whether it got real Postgres or a fake. Constructor injection made the tests a few lines of arrangement — no module mocking, no `jest.mock('./db')` hoisting rituals.
+The punchline: `PaymentService` never knew whether it got real Postgres or a fake — the constructor takes "a `PaymentDbContext`", and both tests and production satisfy it. **Constructor injection is the whole mocking story at this level** — no module mocking, no `jest.mock('./db')` hoisting rituals. That's the interface and DI from Topic 5 paying rent.
 
 ## Interview talking points
 
-- `DbContext` = unit of work, `DbSet<T>` = table, `SaveChangesAsync` = commit; models are the schema because types exist at runtime.
-- EF *tracks changes*: mutate the entity, `SaveChangesAsync` writes the UPDATEs — vs Prisma's explicit `update({ data })`.
-- LINQ queries against EF are translated to SQL from expression trees — filtering happens in the database, not memory.
-- Migrations are generated, versioned C# — reviewable in PRs like Prisma migration files.
+- `DbContext` = unit of work + change tracker, `DbSet<T>` = table, `SaveChangesAsync` = diff-and-commit; models are the schema because types exist at runtime.
+- EF *tracks changes*: mutate the entity, `SaveChangesAsync` writes the UPDATEs — vs Prisma's explicit `update({ data })`. Corollary: mutating an untracked object saves nothing.
+- Migrations are generated, versioned C# with `Up`/`Down`, applied idempotently via `__EFMigrationsHistory` — reviewable in PRs like Prisma migration files.
+- Constraints that span rows (unique email) belong in the database, not in check-then-insert C# — the check and the write must be atomic.
+- LINQ against EF is translated from expression trees to SQL — and `.ToListAsync()` placement decides whether the database or your process does the filtering.
 - Testing story: inject an in-memory `DbContext`; DI means no mocking framework needed for this level.

@@ -1,6 +1,6 @@
 # Topic 7: Exercises & Solutions
 
-> **The PaymentApp build:** Topic 5 in-memory API → Topic 6 Postgres + tests → **Topic 7 (you are here): produce the transfer race in a console lab, then in the real API — and fix it** → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
+> **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → **Topic 7 (you are here): produce the transfer race in a console lab, then in the real API — and fix it** → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
 
 Type in the lesson's `PayThreading` program first and run it a few times — you need to *see* the buggy numbers wobble before the exercises mean anything. 7.1–7.4 stay in the console lab; 7.5 returns to `PaymentApp` for the main event. Try each exercise before reading its solution.
 
@@ -104,7 +104,7 @@ For each scenario, name the tool (`await`/`Task.WhenAll`, `Task.Run`, `Parallel.
 
 ## Exercise 7.5 — Rob your own bank (the main event)
 
-Back to `PaymentApp` — everything running as of Topic 6 (`docker compose up -d`, `dotnet run`).
+Back to `PaymentApp` — everything running as of Topics 5–6 (`docker compose up -d`, `dotnet run`).
 
 1. Register fresh Alice and Bob (fresh DB or new emails). Total money in the system: $2,000.
 2. Fire **50 concurrent** $10 transfers from Alice to Bob from your shell:

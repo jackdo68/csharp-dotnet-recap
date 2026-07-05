@@ -4,7 +4,7 @@
 
 > **How does a .NET API get into a container and onto Kubernetes, how does it behave there compared to a Node service — and when would you honestly pick each?**
 
-This topic hangs off two of the five big differences at once: **#5 batteries included** (health checks, config, graceful shutdown are platform features, not npm packages) and **#2 the thread pool** (one process uses every core — which changes how you scale). The raw material is everything you've built: Topic 5's `PaymentApp`, Topic 6's Postgres compose file (which grows a second service here), and Topic 7's now-race-free transfer.
+This topic hangs off two of the five big differences at once: **#5 batteries included** (health checks, config, graceful shutdown are platform features, not npm packages) and **#2 the thread pool** (one process uses every core — which changes how you scale). The raw material is everything you've built: Topic 5's `PaymentApp`, Topic 5's Postgres compose file (which grows a second service here), and Topic 7's now-race-free transfer.
 
 ## From source to artifact
 

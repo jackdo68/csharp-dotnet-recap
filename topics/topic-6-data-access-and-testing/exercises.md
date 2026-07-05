@@ -1,27 +1,28 @@
 # Topic 6: Exercises & Solutions
 
-> **The PaymentApp build:** Topic 5 in-memory API → **Topic 6 (you are here): Postgres + tests** → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
+> **The PaymentApp build:** Topic 5 the API is born — straight onto Postgres → **Topic 6 (you are here): EF Core unpacked + tests** → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
 
-Do the lesson's swap first (docker-compose Postgres, EF Core packages, `PaymentDbContext`, rewritten service, registration, migration). Try each exercise before reading its solution.
+Work through the lesson first (DbContext/change-tracking/migrations mental model, the unique-email index + its migration, the `PaymentApp.Tests` project). Try each exercise before reading its solution.
 
-## Exercise 6.1 — Prove persistence
+## Exercise 6.1 — Read your own schema
 
-1. Run the app, register Alice and Bob, transfer $250, stop the app (`Ctrl+C`), start it again, check both balances. Confirm the money survived — then say *which registration change from Topic 5's exercises this fixes for good*.
-2. Restart harder: `docker compose down`, then `up -d` again, and check a balance. Did the data survive killing the *database container*? Why — and which compose line is responsible?
-3. Inspect the schema from inside the container:
+You've been running against this schema since Topic 5 — now verify what the migration actually built:
+
+1. Restart harder than 5.1 did: `docker compose down`, then `up -d`, and check a balance. Did the data survive killing the *database container*? Why — and which compose line is responsible?
+2. Inspect the tables from inside the container:
 
    ```bash
    docker compose exec db psql -U payapp -c '\d "Accounts"'
    docker compose exec db psql -U payapp -c '\d "Users"'
+   docker compose exec db psql -U payapp -c '\dt'
    ```
 
-   Where did `numeric` and `text` come from? Why is `"Accounts"` quoted? And find the unique index you declared in `OnModelCreating`.
+   Where did `numeric` and `text` come from? Why is `"Accounts"` quoted? Find the unique index from the lesson — and identify the one table you never created.
 
 **Solution**
 
-1. The balances survive the app restart because state lives in Postgres, not in a service instance. This permanently fixes the Topic 5 lifetime problem: the service went **back to `AddScoped`** (fresh instance per request is now *correct*), and the singleton-bank workaround is gone.
-2. They survive `docker compose down` too, because of the **named volume**: `pgdata:/var/lib/postgresql/data` stores the data outside the container's own filesystem. The container is disposable; the volume isn't. (`docker compose down -v` deletes volumes as well — that's the one that actually wipes your bank. Worth knowing *before* you need to know it.)
-3. `\d "Accounts"` shows something like:
+1. The data survives because of the **named volume**: `pgdata:/var/lib/postgresql/data` stores the data outside the container's own filesystem. The container is disposable; the volume isn't. (`docker compose down -v` deletes volumes as well — that's the one that actually wipes your bank. Worth knowing *before* you need to know it.)
+2. `\d "Accounts"` shows something like:
 
 ```
    Column  |  Type   |                  Modifiers
@@ -31,15 +32,15 @@ Do the lesson's swap first (docker-compose Postgres, EF Core packages, `PaymentD
  Balance   | numeric | not null
 ```
 
-The column types came from your **C# property types, read by reflection** (Topic 3): `decimal` → `numeric` — a *real* arbitrary-precision type, exactly why money is `decimal` end to end. `Id` became the identity PK purely by naming convention. On `"Users"` you'll also find `"IX_Users_Email" UNIQUE` — your one `OnModelCreating` line, now a database constraint. The quotes: EF generates case-sensitive PascalCase identifiers, and unquoted names in Postgres fold to lowercase — so `psql` needs the quotes to find the table.
+The column types came from your **C# property types, read by reflection** (Topic 3): `decimal` → `numeric` — a *real* arbitrary-precision type, exactly why money is `decimal` end to end. `Id` became the identity PK purely by naming convention. On `"Users"` you'll find `"IX_Users_Email" UNIQUE` — the lesson's one `OnModelCreating` line, now a database constraint. The quotes: EF generates case-sensitive PascalCase identifiers, and unquoted names in Postgres fold to lowercase — so `psql` needs the quotes to find the table. And `\dt` reveals **`__EFMigrationsHistory`** — the table you never created: EF's ledger of applied migrations, which is how `database update` knows what's already done.
 
 ## Exercise 6.2 — Duplicate email: whose job is the rule?
 
-You declared `Email` unique in `OnModelCreating`. Prove the *database* enforces it, then make the API respond politely:
+The lesson argued check-then-insert can't enforce uniqueness. Prove the *database* does, then make the API respond politely:
 
 1. Register the same email twice. What status does the second attempt return right now, and what exception type is in the console stack trace?
 2. Catch it in the controller and return **409 Conflict** with a friendly error instead.
-3. One-sentence reasoning: the service *could* check `Users.AnyAsync(u => u.Email == ...)` before inserting — why is the unique index still non-negotiable even if you add that check? (Hint: Topic 7 is next.)
+3. One-sentence check: why is the unique index still non-negotiable even if you *also* add a `Users.AnyAsync(...)` pre-check for a nicer error message? (Hint: Topic 7 is next.)
 
 **Solution**
 
@@ -62,11 +63,11 @@ catch (DbUpdateException)        // unique index violation surfaces here
 
 (Catching `DbUpdateException` in the controller means adding `using Microsoft.EntityFrameworkCore;` — some teams prefer translating it into a domain exception inside the service so controllers never see EF types. Either way, the *catch-by-type* routing is Topic 4 again.)
 
-3. A pre-check reads, then inserts — two steps. Two simultaneous registrations can both pass the check, then both insert. The unique index is the only arbiter that operates *atomically at the moment of write*. This is your first taste of the lesson Topic 7 generalizes: **check-then-act on shared state is a race unless something atomic enforces it.**
+3. A pre-check reads, then inserts — two steps. Two simultaneous registrations can both pass the check, then both insert. The unique index is the only arbiter that operates *atomically at the moment of write* — the pre-check can improve the error message, never the guarantee. This is your first taste of the lesson Topic 7 generalizes: **check-then-act on shared state is a race unless something atomic enforces it.**
 
-## Exercise 6.3 — Migrations round-trip
+## Exercise 6.3 — Migrations round-trip, eyes open
 
-Add a `DateTime CreatedAt` property to `User` (set it to `DateTime.UtcNow` in `RegisterAsync`). Generate and apply a second migration. Look at the generated migration file — what two methods does it contain, and what's the Prisma analogue?
+Add a `DateTime CreatedAt` property to `User` (set it to `DateTime.UtcNow` in `RegisterAsync`). Generate the migration, and **read the generated file before applying it**: what two methods does it contain, what exactly is in each, and what's the Prisma analogue? Then apply and verify with psql.
 
 **Solution**
 
@@ -77,18 +78,23 @@ public DateTime CreatedAt { get; set; }          // on User
 
 ```bash
 dotnet ef migrations add AddUserCreatedAt
+# READ Migrations/*_AddUserCreatedAt.cs first:
+#   Up:   migrationBuilder.AddColumn<DateTime>("CreatedAt", "Users", type: "timestamp with time zone", ...)
+#   Down: migrationBuilder.DropColumn("CreatedAt", "Users")
 dotnet ef database update
+docker compose exec db psql -U payapp -c '\d "Users"'    # CreatedAt | timestamp with time zone
 ```
 
-The generated file has two methods: **`Up`** (apply: `AddColumn<DateTime>...`) and **`Down`** (revert: `DropColumn`). Prisma analogue: the SQL files in `prisma/migrations/` — except EF's are C# you can edit (e.g. to backfill data), and `Down` gives you generated rollbacks. (Npgsql maps `DateTime` to `timestamp with time zone` and expects UTC — `DateTime.UtcNow`, never `.Now`; mixing them is the classic Npgsql runtime error.)
+**`Up`** applies, **`Down`** reverts — the diff was computed against the model snapshot, not the live database. Prisma analogue: the SQL files in `prisma/migrations/` — except EF's are C# you can edit (e.g. to backfill data), and `Down` gives you generated rollbacks. (Npgsql maps `DateTime` to `timestamp with time zone` and expects UTC — `DateTime.UtcNow`, never `.Now`; mixing them is the classic Npgsql runtime error.)
 
 ## Exercise 6.4 — Tests
 
 In `PaymentApp.Tests`:
 
-1. Write a test: registering two users and transferring $250 leaves balances at exactly 750/1250 (the lesson has this — type it, run it).
-2. Write a test for `DepositAsync` from Topic 5's exercises: deposit → balance grows; deposit to user 999 → *assert the exception type*.
-3. Convert the register test into a `[Theory]` with `[InlineData]` covering transfer amounts `0.01`, `500`, `1000` (the whole balance) — assert the money is **conserved**: payer + payee always total 2000.
+1. Type in and run the lesson's three tests (register/transfer/insufficient-funds).
+2. Add a test for `DepositAsync` from Topic 5's exercises: deposit → balance grows; deposit to user 999 → *assert the exception type*.
+3. Add a `[Theory]` with `[InlineData]` covering transfer amounts `0.01`, `500`, `1000` (the whole balance) — assert the money is **conserved**: payer + payee always total 2000.
+4. One reasoning question: the unique-email rule from 6.2 — can these tests verify it? Try registering two users with the same email in a test and see.
 
 **Solution**
 
@@ -124,6 +130,6 @@ public async Task TransferAsync_ConservesMoney(decimal amount)
 }
 ```
 
-`dotnet test` → green. The conservation assertion (`payer + payee == 2000`) is deliberately the *invariant*, not the individual balances — hold onto it, because Topic 7 is about to show you the one condition under which this test passes but production still loses money: **concurrency**. Unit tests run the service one call at a time; the race only exists when two calls overlap.
+4\. **No — the duplicate-email test passes when it shouldn't.** The in-memory provider ignores relational constraints: no unique indexes, no real SQL. Both registrations succeed and no `DbUpdateException` is thrown. This is the in-memory provider's honest price tag: fast, Docker-free unit tests for *logic*, blind to *database* behavior — constraints, locking, translation quirks. The rule of thumb: unit-test the money math in memory; verify constraints and concurrency against real Postgres (integration tests — or, in this course's case, exercise 6.2's curl and Topic 7's attack).
 
-Each test built its own database in one line and handed it to the service by hand — **constructor injection is the whole mocking story** at this level.
+`dotnet test` → green. The conservation assertion (`payer + payee == 2000`) is deliberately the *invariant*, not the individual balances — hold onto it, because Topic 7 is about to show you the one condition under which this test passes but production still loses money: **concurrency**. Unit tests run the service one call at a time; the race only exists when two calls overlap.

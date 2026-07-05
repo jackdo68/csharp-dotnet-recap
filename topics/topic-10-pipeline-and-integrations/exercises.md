@@ -1,6 +1,6 @@
 # Topic 10: Exercises & Solutions
 
-> **The PaymentApp build:** Topic 5 in-memory API → Topic 6 Postgres + tests → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → **Topic 10 (you are here): the pipeline & the payment processor.**
+> **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → **Topic 10 (you are here): the pipeline & the payment processor.**
 
 Set up the lesson's pieces first: the `payment-processor/` folder (copy the lesson's three files — that service is provided, not an exercise), then the PaymentApp changes (DataAnnotations, exception middleware, typed client, `AccountLocks`, orchestrated transfer, auditor). For 10.1–10.6 run things locally against the composed Postgres (`docker compose up -d db`); the closer composes all three. Try each exercise before reading its solution.
 
@@ -170,7 +170,7 @@ One comparison. That's the entire distance between "passed code review" and "pag
 
 **Solution**
 
-1. The app **fails at startup** with `InvalidOperationException: Cannot consume scoped service 'PaymentDbContext' from singleton 'IHostedService'`. The DI container validates the lifetime graph before serving a single request — a *singleton* holding a *scoped* service would secretly extend that DbContext's life to the whole app (one stale unit-of-work forever — Topic 5's lifetime bug in disguise). The fix is the pattern in the lesson: inject `IServiceScopeFactory`, create a fresh scope per tick, resolve the DbContext inside it. This startup error is one of the most-Googled in ASP.NET Core; you've now read it on purpose.
+1. The app **fails at startup** with `InvalidOperationException: Cannot consume scoped service 'PaymentDbContext' from singleton 'IHostedService'`. The DI container validates the lifetime graph before serving a single request — a *singleton* holding a *scoped* service would secretly extend that DbContext's life to the whole app (the exact captive-dependency crash you read in exercise 5.2, now wearing a hosted-service disguise). The fix is the pattern in the lesson: inject `IServiceScopeFactory`, create a fresh scope per tick, resolve the DbContext inside it. This startup error is one of the most-Googled in ASP.NET Core; you've now read it on purpose.
 
 2. `AUDIT: total money in system = 2000.0` — the same number, tick after tick, *while* 50 concurrent transfers hammer the API. That's the reconciliation invariant: transfers move money, they never create or destroy it. A drift means a one-legged transfer escaped compensation — which is why real payment companies run exactly this job (against yesterday's ledger, at much larger scale) and page someone when it's nonzero.
 

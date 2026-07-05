@@ -1,13 +1,13 @@
 # Topic 8: Exercises & Solutions
 
-> **The PaymentApp build:** Topic 5 in-memory API → Topic 6 Postgres + tests → Topic 7 the transfer race → **Topic 8 (you are here): Docker & ship** → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
+> **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → Topic 7 the transfer race → **Topic 8 (you are here): Docker & ship** → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
 
-These ship the `PaymentApp` you've been building since Topic 5. You'll need Docker running (you have it since Topic 6 — the Postgres container). The compose file from Topic 6 grows a second service here. Try each exercise before reading its solution.
+These ship the `PaymentApp` you've been building since Topic 5. You'll need Docker running (you have it since Topic 5 — the Postgres container). The compose file from Topic 5 grows a second service here. Try each exercise before reading its solution.
 
 ## Exercise 8.1 — Publish and inspect the artifact
 
 1. Run a plain `dotnet publish -c Release -o publish` on `PaymentApp` and look inside the output folder. Find your program, and identify which files are *yours* vs *dependencies*.
-2. Run the published app directly (no `dotnet run`) and hit an endpoint (Postgres from Topic 6 must be up: `docker compose up -d`).
+2. Run the published app directly (no `dotnet run`) and hit an endpoint (Postgres from Topic 5 must be up: `docker compose up -d`).
 3. Compare sizes: publish again with `--self-contained -o publish-sc` and `du -sh` both folders. Explain the difference in one sentence — which one needs the runtime image and which could run on a bare distro?
 
 **Solution**
@@ -38,7 +38,7 @@ Framework-dependent is the Docker default (the `aspnet` base image *is* the runt
 The containerized app (8.3) will need both of these — build them now, while everything still runs locally.
 
 1. Add a health endpoint at `/healthz` (two lines — no package install). Verify with curl.
-2. Topic 6 hardcoded the connection string in `Program.cs`. Move it into `appsettings.json` under `ConnectionStrings:PaymentDb` and read it with `builder.Configuration.GetConnectionString("PaymentDb")`. Confirm the app still works.
+2. Topic 5 hardcoded the connection string in `Program.cs`. Move it into `appsettings.json` under `ConnectionStrings:PaymentDb` and read it with `builder.Configuration.GetConnectionString("PaymentDb")`. Confirm the app still works.
 3. Now prove env vars win **without touching any file**: start the app with the password overridden to something wrong, and watch the first request fail. What's the exact env-var name, and what does `__` mean in it?
 
 **Solution**
@@ -89,7 +89,7 @@ The failure is the proof: the env var **beat** `appsettings.json` — no dotenv,
 1. Write a `.dockerignore` (what are the two directories that *must* be in it, and why?).
 2. Write the multi-stage Dockerfile: SDK image to publish, `aspnet` image to run.
 3. Build it, then run it **standalone**: `docker run --rm -p 8080:8080 paymentapp`, and curl a balance. It fails — read the error and explain why `localhost` lies inside a container.
-4. Fix it properly: grow Topic 6's `docker-compose.yml` with an `api` service so the app and Postgres share a network, and point the app at the database with the env var from 8.2. `docker compose up --build`, then curl.
+4. Fix it properly: grow Topic 5's `docker-compose.yml` with an `api` service so the app and Postgres share a network, and point the app at the database with the env var from 8.2. `docker compose up --build`, then curl.
 
 **Solution**
 
@@ -152,10 +152,10 @@ volumes:
 
 ```bash
 docker compose up --build
-curl http://localhost:8080/v1/account/1/balance     # your Topic 6 users — same volume, same data
+curl http://localhost:8080/v1/account/1/balance     # your existing users — same volume, same data
 ```
 
-(Your Topic 6 migrations already created the schema in the `pgdata` volume, so it just works. In real deployments, migrations run as a CI step or init container — not on app startup.)
+(Your Topics 5–6 migrations already created the schema in the `pgdata` volume, so it just works. In real deployments, migrations run as a CI step or init container — not on app startup.)
 
 **Talking point:** the layer-cache trick — `COPY *.csproj` + `restore` before `COPY . .` — is the same optimization as `COPY package*.json` + `npm ci`. And "the image is environment-agnostic; config comes from the environment" is twelve-factor language that lands in any interview, Node or .NET.
 

@@ -4,6 +4,16 @@ This is a C#/.NET recap for an experienced **Node.js + TypeScript** developer wh
 
 **The premise:** TypeScript and C# were designed by the same person (Anders Hejlsberg), so roughly 70% of the concepts are shared — types, generics, interfaces, `async/await`, arrow functions. You're not learning new ideas; you're learning new syntax, a different runtime, and a handful of genuinely different philosophies. This course skips what maps one-to-one and drills the **fundamental differences**.
 
+## The misunderstanding to clear first
+
+Most JS/TS developers carry a mental image of C# frozen around 2005: a verbose, ceremony-heavy Java clone for enterprise shops — `public static void Main`, XML config, IDEs the size of operating systems. That image is roughly two decades stale, and correcting it is half the ramp-up.
+
+The uncomfortable historical truth runs the other way: **much of what you love about modern TS was in C# first.** `var` type inference and lambda arrow functions landed in C# 3.0 in 2007 — lambdas beat ES6's arrows by eight years. `async/await` didn't just arrive early in C#; it was *invented* there (C# 5, 2012), and JavaScript later adopted it wholesale. LINQ gave C# `filter`/`map`/`reduce` before JS had `.filter`/`.map`/`.reduce`. When TS added strict null checking, records-style immutability patterns, and discriminated narrowing, the two languages weren't diverging — they were converging, with the same person steering both.
+
+So the honest mental model isn't "learning a foreign language." Charles Chen's article [*Building up from JavaScript to TypeScript to C# 10 and .NET*](https://blog.devgenius.io/building-up-from-javascript-to-typescript-to-c-10-and-net-6-669a70cd0a66) — a strong companion read for this course — frames it as a toy-brick progression: JS, TS, and C# are the same building system at increasing levels of precision, Duplo to Lego to Technic in his analogy. Each step up gives you smaller, more exact pieces and a higher ceiling; none of them throws away what your hands already know. Moving from TS to C# is the second step of a climb you already started when you moved from JS to TS — and if you've felt the pain that motivated *that* move (runtime surprises TS can't catch, `this` binding, an event loop that caps you at one core), Topics 3, 4, and 7 are precisely where C# keeps climbing past where TS has to stop.
+
+Even Node's creator reached this conclusion: Ryan Dahl has spoken openly about Node's design regrets (it's why he built Deno). None of this makes Node bad — it makes "JS everywhere by default" a habit worth re-examining, which is presumably why you're here.
+
 ## The five big differences
 
 Everything in this course hangs off five differences. Burn these in — they're the organizing story, and each one is where a topic lives:

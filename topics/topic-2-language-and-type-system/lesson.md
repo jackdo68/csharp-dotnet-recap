@@ -93,6 +93,7 @@ Every construct above that has no TS equivalent, mapped to what you know:
 - **LINQ** — `.Where`/`.Select`/`.Sum`/`.Aggregate` = `.filter`/`.map`/`.reduce`. Also `.FirstOrDefault(pred)` = `.find(pred)`, `.OrderByDescending(...)` = sort. Same idea, different names — you'll be fluent in an hour. (Full vocabulary and the two things it does that array methods can't: two sections down.)
 - **`Task` vs `Promise`** — same concept: `Task` = `Promise<void>`, `Task<T>` = `Promise<T>`. Async method names end in `Async` by convention.
 - **Local functions** — a function declared mid-file works like a hoisted named `function` in JS: callable before its declaration.
+- **Lambdas close over variables, and there is no `this` trap** — `a => a.Amount > 500_000` captures surrounding variables exactly like a JS closure. What's *missing* is the entire `this`-binding minefield: C# has no `.bind(this)`, no "arrow function vs regular function" distinction, no callbacks that mysteriously lose their context. `this` inside any lambda is simply the enclosing instance, always. An entire category of JS bugs (and interview questions) doesn't exist here.
 - **Value types vs reference types** — `int`, `bool`, and `decimal` above are *value types*: assignment copies (like JS primitives). `class` instances are *reference types*: assignment shares (like JS objects). Matters for threading (Topic 7) and `int?`. (You can also declare your own value types with `struct` — unpacked three sections down.)
 
 ## Properties unpacked — what `{ get; set; }` actually is

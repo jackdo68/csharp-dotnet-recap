@@ -10,7 +10,7 @@ export default defineConfig({
     starlight({
       title: 'C# .NET Recap',
       description:
-        'C# and .NET for Node.js + TypeScript developers — the fundamental differences, taught by building a Loan Application API.',
+        'C# and .NET for Node.js + TypeScript developers — the fundamental differences, taught by building a Payment API.',
       logo: { src: './src/assets/logo.svg', alt: 'C# .NET Recap' },
       favicon: '/favicon.svg',
       head: [
@@ -38,6 +38,8 @@ export default defineConfig({
         { label: 'Topic 6 · Data Access & Testing', items: [{ autogenerate: { directory: 'topic-6-data-access-and-testing' } }] },
         { label: 'Topic 7 · Concurrency & Threading', items: [{ autogenerate: { directory: 'topic-7-concurrency-and-threading' } }] },
         { label: 'Topic 8 · Production: Build, Ship, Run', items: [{ autogenerate: { directory: 'topic-8-production-build-ship-run' } }] },
+        { label: 'Topic 9 · Auth: Register, Login, JWT', items: [{ autogenerate: { directory: 'topic-9-authentication' } }] },
+        { label: 'Topic 10 · The Pipeline & Integrations', items: [{ autogenerate: { directory: 'topic-10-pipeline-and-integrations' } }] },
       ],
     }),
   ],

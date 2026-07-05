@@ -1,11 +1,11 @@
 ---
 title: C# .NET Recap
-description: C# and .NET for Node.js + TypeScript developers — the fundamental differences, taught by building a Loan Application API.
+description: C# and .NET for Node.js + TypeScript developers — the fundamental differences, taught by building a Payment API.
 ---
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-A hands-on C#/.NET recap for an experienced **Node.js + TypeScript** developer. It doesn't try to cover everything — it covers the **fundamental differences** between the two stacks, because the other ~70% you already know. Every topic has a **lesson** (concepts, always mapped to your TS knowledge) and **exercises with solutions** (hands-on, building one Loan Application API across the whole course — full working code + interview talking points).
+A hands-on C#/.NET recap for an experienced **Node.js + TypeScript** developer. It doesn't try to cover everything — it covers the **fundamental differences** between the two stacks, because the other ~70% you already know. Every topic has a **lesson** (concepts, always mapped to your TS knowledge) and **exercises with solutions** (hands-on — Topics 5–9 build one **Payment API** end to end: register, login, transfer, balance — full working code + interview talking points).
 
 ## The seven topics
 
@@ -33,22 +33,32 @@ A hands-on C#/.NET recap for an experienced **Node.js + TypeScript** developer. 
   <LinkCard
     title="Topic 5 · Web API & Dependency Injection"
     href={`${import.meta.env.BASE_URL}topic-5-web-api-and-di/lesson/`}
-    description="Build the Loan API: controllers, constructor injection, DI lifetimes, batteries-included vs assemble-your-own."
+    description="The Payment API is born: register/transfer/balance, controllers, constructor injection, DI lifetimes."
   />
   <LinkCard
     title="Topic 6 · Data Access & Testing"
     href={`${import.meta.env.BASE_URL}topic-6-data-access-and-testing/lesson/`}
-    description="EF Core (the Prisma of .NET), migrations, and xUnit tests that prove why DI matters."
+    description="EF Core (the Prisma of .NET) + Postgres in Docker: Users and Accounts tables, migrations, xUnit tests."
   />
   <LinkCard
     title="Topic 7 · Concurrency & Threading"
     href={`${import.meta.env.BASE_URL}topic-7-concurrency-and-threading/lesson/`}
-    description="A thread pool, not an event loop: real parallelism, race conditions, lock, Interlocked, and the I/O-vs-CPU rule."
+    description="A thread pool, not an event loop: race the transfer endpoint, watch money vanish, fix it with lock and SemaphoreSlim."
   />
   <LinkCard
     title="Topic 8 · Production: Build, Ship, Run"
     href={`${import.meta.env.BASE_URL}topic-8-production-build-ship-run/lesson/`}
-    description="dotnet publish, the multi-stage Dockerfile, Kubernetes without pm2, performance honestly — and when to pick Node vs .NET."
+    description="dotnet publish, the multi-stage Dockerfile, api + db in compose, Kubernetes without pm2 — and when to pick Node vs .NET."
+  />
+  <LinkCard
+    title="Topic 9 · Auth: Register, Login, JWT"
+    href={`${import.meta.env.BASE_URL}topic-9-authentication/lesson/`}
+    description="Password hashing, /v1/login issuing JWTs, [Authorize], and ownership checks: your token, your money."
+  />
+  <LinkCard
+    title="Topic 10 · The Pipeline & Integrations"
+    href={`${import.meta.env.BASE_URL}topic-10-pipeline-and-integrations/lesson/`}
+    description="Middleware, declarative validation, IHttpClientFactory calling a Node payment processor, per-account locks & deadlocks, a background auditor."
   />
 </CardGrid>
 

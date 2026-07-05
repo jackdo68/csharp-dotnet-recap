@@ -4,7 +4,7 @@
 
 > **How does a .NET API get into a container and onto Kubernetes, how does it behave there compared to a Node service — and when would you honestly pick each?**
 
-This topic hangs off two of the five big differences at once: **#5 batteries included** (health checks, config, graceful shutdown are platform features, not npm packages) and **#2 the thread pool** (one process uses every core — which changes how you scale). Topic 1's `dotnet publish` vocabulary and Topic 5's `LoanApp` are the raw material.
+This topic hangs off two of the five big differences at once: **#5 batteries included** (health checks, config, graceful shutdown are platform features, not npm packages) and **#2 the thread pool** (one process uses every core — which changes how you scale). The raw material is everything you've built: Topic 5's `PaymentApp`, Topic 6's Postgres compose file (which grows a second service here), and Topic 7's now-race-free transfer.
 
 ## From source to artifact
 
@@ -26,7 +26,7 @@ You already write multi-stage Dockerfiles for Node. The .NET one is structurally
 # ---- build stage ----                        # Node equivalent:
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build # FROM node:22 AS build
 WORKDIR /src
-COPY LoanApp.csproj .                           # COPY package*.json .
+COPY PaymentApp.csproj .                           # COPY package*.json .
 RUN dotnet restore                              # RUN npm ci        ← same layer-cache trick!
 COPY . .
 RUN dotnet publish -c Release -o /app           # RUN npm run build
@@ -35,7 +35,7 @@ RUN dotnet publish -c Release -o /app           # RUN npm run build
 FROM mcr.microsoft.com/dotnet/aspnet:10.0       # FROM node:22-slim
 WORKDIR /app
 COPY --from=build /app .
-ENTRYPOINT ["dotnet", "LoanApp.dll"]            # CMD ["node", "dist/main.js"]
+ENTRYPOINT ["dotnet", "PaymentApp.dll"]            # CMD ["node", "dist/main.js"]
 ```
 
 Point by point:
@@ -53,7 +53,7 @@ K8s doesn't know it's running .NET — same Deployment/Service YAML you'd write 
 |---|---|---|
 | Liveness/readiness endpoints | `express-healthcheck` or hand-rolled | `builder.Services.AddHealthChecks(); app.MapHealthChecks("/healthz");` — built in |
 | Graceful shutdown on SIGTERM | `process.on('SIGTERM')` + drain by hand | the host catches SIGTERM, stops accepting, drains in-flight requests — built in |
-| Config from env vars | `dotenv` + `process.env` glue | config system binds env vars over `appsettings.json` automatically; `__` maps to `:` (`ConnectionStrings__Default` overrides `ConnectionStrings:Default`) |
+| Config from env vars | `dotenv` + `process.env` glue | config system binds env vars over `appsettings.json` automatically; `__` maps to `:` (`ConnectionStrings__PaymentDb` overrides `ConnectionStrings:PaymentDb`) |
 | Container resource awareness | V8 heap flags by hand (`--max-old-space-size`) | runtime reads **cgroup limits**: thread pool and GC size themselves to the pod's CPU/memory limits, not the node's |
 
 And the big operational difference, straight from Topic 7: **there is no pm2, no cluster mode, no "one replica per core."** A Node pod uses one core; getting sixteen cores means sixteen processes and something to shepherd them. One .NET process already saturates every core the pod grants. You still run multiple replicas — for rolling deploys and resilience — but replica count is a reliability decision, not a CPU-math decision.
@@ -68,7 +68,7 @@ The one-sentence version: .NET trades slower startup for much higher steady-stat
 
 ## Production debugging — the `dotnet-*` trio
 
-Local debugging you already have: F5 in VS Code, and breakpoints survive `await` across thread hops (set one after an `await` in `LoanApp` and check the thread ID — Topic 7 live in the debugger).
+Local debugging you already have: F5 in VS Code, and breakpoints survive `await` across thread hops (set one after an `await` in `PaymentApp` and check the thread ID — Topic 7 live in the debugger).
 
 Against a *live* process — including inside a container — three CLI tools attach without restarting anything:
 

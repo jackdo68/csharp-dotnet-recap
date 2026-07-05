@@ -20,7 +20,18 @@ Unlike Node, the SDK is the whole toolchain: compiler, runtime, package manager,
 
 Install the **C# Dev Kit** extension (publisher: Microsoft) from the Extensions panel. It gives you IntelliSense, debugging, and test running — the equivalent of your TS tooling.
 
-## 3. Make a workspace folder for the exercises
+## 3. Docker (needed from Topic 6 on)
+
+Topics 6–9 run PostgreSQL — and eventually the app itself — in containers via `docker compose`. If you don't already have it:
+
+```bash
+brew install --cask docker     # Docker Desktop; or use OrbStack/colima if you prefer
+docker compose version         # verify
+```
+
+Nothing to configure now; Topic 6 supplies the compose file.
+
+## 4. Make a workspace folder for the exercises
 
 ```bash
 mkdir ~/csharp-recap && cd ~/csharp-recap
@@ -36,15 +47,7 @@ COMMANDS.md   ← the dotnet CLI cheat sheet
 site/         ← the Astro (Starlight) site that renders it all
 ```
 
-The site syncs `topics/` into its content directory at build time, so **edit the markdown in `topics/`, not in `site/src/content/`**.
-
-### Run the site locally
-
-```bash
-cd site
-npm install
-npm run dev     # syncs content, then serves at localhost:4321
-```
+The site syncs `topics/` into its content directory at build time, so **edit the markdown in `topics/`, not in `site/src/content/`**. The site isn't run locally — it exists to be deployed.
 
 ### Deployment
 

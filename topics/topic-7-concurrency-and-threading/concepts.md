@@ -163,6 +163,15 @@ public void AddToTotal(decimal amount)
 }
 ```
 
+**Real-world uses:**
+
+| Use case | Example |
+|----------|---------|
+| In-memory cache | `lock (_cache) { _cache[key] = value; }` |
+| Lazy initialization | `lock (_gate) { _instance ??= new Service(); }` |
+| Accumulating results | `lock (_results) { _results.Add(item); }` |
+| Thread-safe counters | When you need multiple operations (read + check + update) |
+
 ⚠️ **Limitation:** Can't contain `await` — compiler error CS1996. Why? After `await`, a different thread may resume, but `lock` must be released by the same thread that acquired it.
 
 ### 3. `SemaphoreSlim` — async critical section
@@ -170,8 +179,18 @@ public void AddToTotal(decimal amount)
 For critical sections **with** `await`:
 
 ```csharp
-private static readonly SemaphoreSlim _gate = new(1, 1);  // 1 slot = mutex
+private static readonly SemaphoreSlim _gate = new(1, 1);
+//                                               │  └── max count (max threads that can ever hold it)
+//                                               └───── initial count (available slots at start)
+```
 
+| Constructor | Meaning |
+|-------------|---------|
+| `new(1, 1)` | Mutex — only 1 thread at a time |
+| `new(3, 3)` | Allow up to 3 concurrent threads |
+| `new(0, 1)` | Start locked — first `WaitAsync` blocks until someone calls `Release` |
+
+```csharp
 public async Task TransferAsync(...)
 {
     await _gate.WaitAsync();   // async "lock"
@@ -187,6 +206,19 @@ public async Task TransferAsync(...)
     }
 }
 ```
+
+**Real-world uses:**
+
+| Use case | Why `SemaphoreSlim` | Example |
+|----------|---------------------|---------|
+| DB transactions | Contains `await _db.SaveChangesAsync()` | `new(1, 1)` — one write at a time |
+| Rate limiting | Limit concurrent API calls | `new(5, 5)` — max 5 in flight |
+| Resource pooling | Limit concurrent connections | `new(10, 10)` — 10 connections |
+| File access | Async file I/O | `new(1, 1)` — one writer at a time |
+
+**The rule:**
+- Has `await` inside? → `SemaphoreSlim`
+- No `await`? → `lock` (simpler, slightly faster)
 
 | Sync | Async |
 |------|-------|

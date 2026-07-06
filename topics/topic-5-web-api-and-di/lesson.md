@@ -17,7 +17,7 @@ A small **payment service** — the app the rest of the course grows one topic a
 | Endpoint | Access | Arrives in |
 |---|---|---|
 | `POST /v1/register` — name, email, password → new user + account | public | **Topic 5** |
-| `GET /v1/account/{userId}/balance` | public *for now* | **Topic 5** |
+| `GET /v1/accounts/{userId}/balance` | public *for now* | **Topic 5** |
 | `POST /v1/payments/transfer` — payer, payee, amount | public *for now* | **Topic 5** |
 | `POST /v1/login` — email + password → JWT | public | Topic 9 |
 | the two money endpoints locked behind tokens | private | Topic 9 |
@@ -248,18 +248,18 @@ public class UsersController : ControllerBase
 }
 ```
 
-`Controllers/AccountController.cs`:
+`Controllers/AccountsController.cs`:
 
 ```csharp
 [ApiController]
-[Route("v1/account")]
-public class AccountController : ControllerBase
+[Route("v1/accounts")]
+public class AccountsController : ControllerBase
 {
     private readonly IPaymentService _payments;
 
-    public AccountController(IPaymentService payments) => _payments = payments;
+    public AccountsController(IPaymentService payments) => _payments = payments;
 
-    [HttpGet("{userId}/balance")]                // GET /v1/account/3/balance
+    [HttpGet("{userId}/balance")]                // GET /v1/accounts/3/balance
     public async Task<ActionResult<decimal>> GetBalance(int userId)
     {
         var balance = await _payments.GetBalanceAsync(userId);
@@ -269,7 +269,7 @@ public class AccountController : ControllerBase
 }
 ```
 
-(Topic 9 changes this route to `GET /v1/account/balance` — *whose* balance will come from the token, not the URL. Until then, the URL parameter is an honest placeholder.)
+(Topic 9 changes this route to `GET /v1/accounts/balance` — *whose* balance will come from the token, not the URL. Until then, the URL parameter is an honest placeholder.)
 
 `Controllers/PaymentsController.cs` — where Topic 4 pays off:
 

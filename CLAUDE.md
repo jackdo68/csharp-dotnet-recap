@@ -72,7 +72,7 @@ Code style in examples: money is always `decimal`, async methods end in `Async`,
 
 ### The Payment domain (Topics 5–10)
 
-`PaymentApp`: `User` (Id, Name, Email, PasswordHash) + `Account` (Id, UserId, Balance); users Alice/Bob/Cara with `*@bank.test` emails and password `Passw0rd!`; every new account starts with a **$1,000** balance; routes are `v1/...` (`/v1/register`, `/v1/login`, `/v1/payments/transfer`, `/v1/account/balance`); Postgres credentials `payapp`/`devpass`; the processor (Node/Express, port 4000) owns `/v1/withdraw` + `/v1/deposit` and is the only writer of balances from Topic 10 on. The concurrency arc is load-bearing and staged: transfer is deliberately racy until Topic 7 (static `SemaphoreSlim`), which Topic 10 replaces with per-account ordered locks + the processor's atomic `UPDATE` — don't "fix" an earlier topic with a later topic's tool. Don't introduce unrelated example domains.
+`PaymentApp`: `User` (Id, Name, Email, PasswordHash) + `Account` (Id, UserId, Balance); users Alice/Bob/Cara with `*@bank.test` emails and password `Passw0rd!`; every new account starts with a **$1,000** balance; routes are `v1/...` (`/v1/register`, `/v1/login`, `/v1/payments/transfer`, `/v1/accounts/balance`); Postgres credentials `payapp`/`devpass`; the processor (Node/Express, port 4000) owns `/v1/withdraw` + `/v1/deposit` and is the only writer of balances from Topic 10 on. The concurrency arc is load-bearing and staged: transfer is deliberately racy until Topic 7 (static `SemaphoreSlim`), which Topic 10 replaces with per-account ordered locks + the processor's atomic `UPDATE` — don't "fix" an earlier topic with a later topic's tool. Don't introduce unrelated example domains.
 
 ### Accuracy notes
 

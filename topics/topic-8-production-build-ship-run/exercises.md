@@ -21,7 +21,7 @@ ls publish/
 # Npgsql.dll, Microsoft.EntityFrameworkCore.dll, ... ← NuGet deps, copied out of the global cache
 
 dotnet publish/PaymentApp.dll     # runs without the project — this is what the container runs
-curl http://localhost:5000/v1/account/1/balance
+curl http://localhost:5000/v1/accounts/1/balance
 
 dotnet publish -c Release --self-contained -o publish-sc
 du -sh publish publish-sc
@@ -76,7 +76,7 @@ The override — `__` (double underscore) is how env vars spell the `:` hierarch
 ConnectionStrings__PaymentDb="Host=localhost;Database=payapp;Username=payapp;Password=WRONG" \
   dotnet run
 # app starts fine (config isn't validated at startup)...
-curl http://localhost:PORT/v1/account/1/balance
+curl http://localhost:PORT/v1/accounts/1/balance
 # → 500: Npgsql "password authentication failed for user 'payapp'"
 ```
 
@@ -152,7 +152,7 @@ volumes:
 
 ```bash
 docker compose up --build
-curl http://localhost:8080/v1/account/1/balance     # your existing users — same volume, same data
+curl http://localhost:8080/v1/accounts/1/balance     # your existing users — same volume, same data
 ```
 
 (Your Topics 5–6 migrations already created the schema in the `pgdata` volume, so it just works. In real deployments, migrations run as a CI step or init container — not on app startup.)

@@ -13,7 +13,7 @@ Scaffold (`dotnet new webapi --use-controllers -n PaymentApp`, delete the Weathe
 3. `Data/PaymentDbContext.cs` — the database session (minimal; Topic 6 unpacks it)
 4. `Services/IPaymentService.cs` — the contract
 5. `Services/PaymentService.cs` — the implementation, against the real database
-6. `Controllers/UsersController.cs`, `AccountController.cs`, `PaymentsController.cs`
+6. `Controllers/UsersController.cs`, `AccountsController.cs`, `PaymentsController.cs`
 7. `Program.cs` — the DI registrations
 
 Then the schema cookbook (`dotnet ef migrations add InitialCreate` + `dotnet ef database update` — Topic 6 explains what just happened) and `dotnet run`.
@@ -38,8 +38,8 @@ curl -X POST http://localhost:PORT/v1/register \
   -H "Content-Type: application/json" \
   -d '{"name":"Bob","email":"bob@bank.test","password":"Passw0rd!"}'
 
-curl http://localhost:PORT/v1/account/1/balance     # 1000
-curl http://localhost:PORT/v1/account/2/balance     # 1000
+curl http://localhost:PORT/v1/accounts/1/balance     # 1000
+curl http://localhost:PORT/v1/accounts/2/balance     # 1000
 ```
 
 2. Transfer $250 from Alice (user 1) to Bob (user 2), and confirm both balances moved.
@@ -57,8 +57,8 @@ curl -X POST http://localhost:PORT/v1/payments/transfer \
   -H "Content-Type: application/json" \
   -d '{"payerUserId":1,"payeeUserId":2,"amount":250}'
 # {"status":"completed"}
-curl http://localhost:PORT/v1/account/1/balance     # 750
-curl http://localhost:PORT/v1/account/2/balance     # 1250
+curl http://localhost:PORT/v1/accounts/1/balance     # 750
+curl http://localhost:PORT/v1/accounts/2/balance     # 1250
 ```
 
 3. The four failures:
@@ -106,7 +106,7 @@ The container validates the whole dependency graph at startup (in the Developmen
 
 ## Exercise 5.3 — The deposit endpoint
 
-Add `POST /v1/account/{userId}/deposit` that adds money to an account. Work in dependency order — contract, implementation, endpoint — and use the compiler as your to-do list.
+Add `POST /v1/accounts/{userId}/deposit` that adds money to an account. Work in dependency order — contract, implementation, endpoint — and use the compiler as your to-do list.
 
 1. Add `Task<decimal> DepositAsync(int userId, decimal amount)` to the interface (returns the new balance; throw for unknown user or non-positive amount).
 2. Save and read the error on `PaymentService` before fixing it — what does it say?
@@ -137,10 +137,10 @@ public async Task<decimal> DepositAsync(int userId, decimal amount)
 }
 ```
 
-`Controllers/AccountController.cs` — add (and put `record DepositRequest(decimal Amount);` in `Models/Requests.cs`):
+`Controllers/AccountsController.cs` — add (and put `record DepositRequest(decimal Amount);` in `Models/Requests.cs`):
 
 ```csharp
-[HttpPost("{userId}/deposit")]                  // POST /v1/account/3/deposit
+[HttpPost("{userId}/deposit")]                  // POST /v1/accounts/3/deposit
 public async Task<ActionResult<decimal>> Deposit(int userId, DepositRequest request)
 {
     try
@@ -154,9 +154,9 @@ public async Task<ActionResult<decimal>> Deposit(int userId, DepositRequest requ
 ```
 
 ```bash
-curl -X POST http://localhost:PORT/v1/account/1/deposit \
+curl -X POST http://localhost:PORT/v1/accounts/1/deposit \
   -H "Content-Type: application/json" -d '{"amount":500}'      # 1250 (or wherever Alice was)
-curl -i -X POST http://localhost:PORT/v1/account/999/deposit \
+curl -i -X POST http://localhost:PORT/v1/accounts/999/deposit \
   -H "Content-Type: application/json" -d '{"amount":500}'      # 404
 ```
 

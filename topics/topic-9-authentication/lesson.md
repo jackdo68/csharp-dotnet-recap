@@ -24,7 +24,7 @@ The Node mapping up front:
 POST /v1/login  { email, password }
       └─► verify password hash  ─► build claims (sub=id, name)  ─► sign JWT with Jwt:Key ─► return token
 
-GET /v1/account/balance   Authorization: Bearer eyJ...
+GET /v1/accounts/balance   Authorization: Bearer eyJ...
       └─► JwtBearer middleware: verify signature + expiry with the SAME Jwt:Key
             └─► claims become User  ─► [Authorize] passes  ─► action reads sub  ─► that user's balance
 ```
@@ -149,10 +149,10 @@ app.MapControllers();
 ```csharp
 [Authorize]                                   // token required for EVERYTHING here
 [ApiController]
-[Route("v1/account")]
-public class AccountController : ControllerBase
+[Route("v1/accounts")]
+public class AccountsController : ControllerBase
 {
-    [HttpGet("balance")]                      // GET /v1/account/balance — final spec: no userId in URL
+    [HttpGet("balance")]                      // GET /v1/accounts/balance — final spec: no userId in URL
     public async Task<ActionResult<decimal>> GetBalance()
     {
         var userId = int.Parse(User.FindFirstValue("sub")!);   // WHO, from the verified token
@@ -194,7 +194,7 @@ Two things to notice:
 |---|---|---|
 | `POST /v1/register` | public | public |
 | `POST /v1/login` | — | public, issues JWT |
-| `GET /v1/account/{userId}/balance` | public, anyone reads anyone | `GET /v1/account/balance` — private, *own* balance via `sub` |
+| `GET /v1/accounts/{userId}/balance` | public, anyone reads anyone | `GET /v1/accounts/balance` — private, *own* balance via `sub` |
 | `POST /v1/payments/transfer` | public, anyone moves anyone's money | private + payer must equal caller |
 
 ## Interview talking points

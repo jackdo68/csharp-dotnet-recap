@@ -75,7 +75,7 @@ The senior version of this answer: "validation lives at the layer that has the i
 ## Exercise 10.3 — Your own middleware
 
 1. Add the lesson's inline timing middleware and the `ExceptionMappingMiddleware`. Register the exception mapper **first** in the pipeline, then timing, then auth. Why does the mapper have to be first?
-2. Delete the try/catch from `PaymentsController.Transfer` and `AccountController.Deposit`. Re-run the failure curls from Topic 5's exercise 5.1 — confirm the statuses are identical to before.
+2. Delete the try/catch from `PaymentsController.Transfer` and `AccountsController.Deposit`. Re-run the failure curls from Topic 5's exercise 5.1 — confirm the statuses are identical to before.
 3. Watch the timing middleware's output — including for a request that *failed*. What does the logged status tell you about middleware ordering?
 
 **Solution**
@@ -96,7 +96,7 @@ The exception→status table now exists **once**, in one file, instead of copy-p
 
 ## Exercise 10.4 — The typed client and the concurrent saga
 
-1. Wire the lesson's `PaymentProcessorClient` (registration + config key), replace `TransferAsync`'s EF mutations with the lock + `Task.WhenAll` + compensation orchestration, and delete the old static `SemaphoreSlim`. With the processor running, do a normal transfer end to end and confirm balances via `/v1/account/balance`.
+1. Wire the lesson's `PaymentProcessorClient` (registration + config key), replace `TransferAsync`'s EF mutations with the lock + `Task.WhenAll` + compensation orchestration, and delete the old static `SemaphoreSlim`. With the processor running, do a normal transfer end to end and confirm balances via `/v1/accounts/balance`.
 2. Now break the downstream: **stop the processor** (Ctrl+C) and fire a transfer. What status does the caller get, and which piece of today's code chose it?
 3. Force a one-leg failure: transfer to a payee that doesn't exist. Trace what happened to the payer's money — step by step, from your app's log lines and the balances.
 

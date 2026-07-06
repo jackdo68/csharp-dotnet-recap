@@ -227,7 +227,7 @@ app.UseMiddleware<ExceptionMappingMiddleware>();
 // then timing, then UseAuthentication, UseAuthorization, MapControllers
 ```
 
-Now delete the try/catch from `PaymentsController` and `AccountController` — actions shrink to their happy path, and the exception→status mapping is stated **once** for the whole app. Topic 4's catch-by-type, promoted from per-endpoint to infrastructure. (The framework also ships `UseExceptionHandler`/`IExceptionHandler` for this job with RFC-7807 output; writing it by hand once is how you understand what they do.)
+Now delete the try/catch from `PaymentsController` and `AccountsController` — actions shrink to their happy path, and the exception→status mapping is stated **once** for the whole app. Topic 4's catch-by-type, promoted from per-endpoint to infrastructure. (The framework also ships `UseExceptionHandler`/`IExceptionHandler` for this job with RFC-7807 output; writing it by hand once is how you understand what they do.)
 
 ## Gap 3 — outbound HTTP: `IHttpClientFactory` + a typed client (≈ axios)
 

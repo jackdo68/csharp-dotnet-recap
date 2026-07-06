@@ -37,20 +37,20 @@ echo $TOKEN | cut -d '.' -f2 | base64 --decode
 
 ## Exercise 9.2 — Prove the signature matters
 
-1. Call `GET /v1/account/balance` three ways: no token, with the real token, and with a **tampered** token — take your real token and change one character in the middle (payload) chunk. Predict the three responses first.
+1. Call `GET /v1/accounts/balance` three ways: no token, with the real token, and with a **tampered** token — take your real token and change one character in the middle (payload) chunk. Predict the three responses first.
 2. Look at the 401s' `WWW-Authenticate` header — what does the middleware tell you about *why* it refused?
 3. Restart the app with a different signing key (`Jwt__Key="a-completely-different-32-char-key!!" dotnet run`) and use your old token. What happens, and what does that tell you about what a token *is*?
 
 **Solution**
 
 ```bash
-curl -i http://localhost:PORT/v1/account/balance
+curl -i http://localhost:PORT/v1/accounts/balance
 # 401 — WWW-Authenticate: Bearer                        (no token at all)
 
-curl -i http://localhost:PORT/v1/account/balance -H "Authorization: Bearer $TOKEN"
+curl -i http://localhost:PORT/v1/accounts/balance -H "Authorization: Bearer $TOKEN"
 # 200 — 1000  (YOUR balance, no userId in the URL anymore)
 
-curl -i http://localhost:PORT/v1/account/balance -H "Authorization: Bearer ${TOKEN/A/B}"
+curl -i http://localhost:PORT/v1/accounts/balance -H "Authorization: Bearer ${TOKEN/A/B}"
 # 401 — WWW-Authenticate: Bearer error="invalid_token"  (signature check failed)
 ```
 
@@ -126,7 +126,7 @@ curl -X POST http://localhost:8080/v1/register -H "Content-Type: application/jso
   -d '{"name":"Cara","email":"cara@bank.test","password":"Passw0rd!"}'
 TOKEN=$(curl -s -X POST http://localhost:8080/v1/login -H "Content-Type: application/json" \
   -d '{"email":"cara@bank.test","password":"Passw0rd!"}' | jq -r .token)
-curl http://localhost:8080/v1/account/balance -H "Authorization: Bearer $TOKEN"    # 1000
+curl http://localhost:8080/v1/accounts/balance -H "Authorization: Bearer $TOKEN"    # 1000
 ```
 
 3\. The 9.1 token **fails (401)** against the container: it was signed with the dev key, and the container validates with the compose key — same lesson as 9.2's key swap, now happening *between environments*, which is exactly where it bites real teams. And when `api` scales to two replicas, any replica may receive any request, so all of them must validate (and sign) with the same key — shared signing material is a *deployment* concern, not a code concern. (Follow the thread one step further — "what if many *different services* need to validate?" — and you've reinvented the separate identity server: one issuer, public-key validation everywhere. That's OpenIddict/Duende territory, the graduation path from this design.)

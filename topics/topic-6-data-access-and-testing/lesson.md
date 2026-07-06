@@ -38,6 +38,27 @@ public class PaymentDbContext : DbContext
 - **`Set<User>()`** is Topic 3's reified generics doing real work: the type argument locates the table mapping at runtime. `Users` → table `"Users"` purely by convention; `Id` → identity primary key, also by convention.
 - **Change tracking is the Prisma difference to internalize.** In Topic 5's transfer you wrote `payer.Balance -= amount;` — a plain property mutation, no ORM call — and then one `SaveChangesAsync()`. At save time EF *diffs* every tracked entity against the snapshot it took when handing them out, and emits exactly the `UPDATE` statements needed, wrapped in a transaction. Prisma makes you *declare* the write (`update({ where, data })`); EF *observes* it. Both models are fine; confusing them is how you write EF code that saves nothing (mutating an entity the context never tracked).
 
+### Staged writes — `Add` is `git add`, `SaveChanges` is `git commit`
+
+The same deferred model governs *inserts*, and it's where Prisma instinct actively misleads. `_db.Users.Add(user)` performs **zero SQL** — it registers the object with the change tracker in state `Added`: an intention, recorded in memory. The database round trip happens at `SaveChangesAsync()`, and only *then* does the id exist:
+
+```csharp
+// Prisma: every call IS a round trip          // EF: calls accumulate intentions
+const u = await prisma.user.create({ data });  _db.Users.Add(user);        // no SQL. user.Id == 0 !
+console.log(u.id);  // id already real         _db.Users.Add(another);     // still no SQL
+                                               await _db.SaveChangesAsync(); // ONE trip, ONE transaction
+                                               Console.WriteLine(user.Id);   // now real — read back
+                                               //   via INSERT ... RETURNING "Id"
+```
+
+This is the **unit of work** pattern (the official docs use exactly that term): collect every change belonging to one business operation, then flush them together, atomically. Three consequences you'll feel:
+
+1. **One `SaveChangesAsync` = one implicit transaction.** The transfer's two balance mutations commit or neither does — you got atomicity without writing `BEGIN`/`COMMIT`. That's the pattern's main payoff, not a side effect.
+2. **The classic EF bug is forgetting to save.** Mutate entities, return, wonder why the database never changed. Prisma structurally can't have this bug (every write is a call); EF trades that safety for batching.
+3. **Staged entities have default ids** (`0`) until the flush — which is exactly why Topic 5's `RegisterAsync` calls `SaveChangesAsync` *twice*: the `Account` row needs `user.Id`, and the id doesn't exist until the user's insert has actually run. (With a navigation property — `User.Account` — EF would stage both, save **once**, insert in dependency order, and fix up the foreign key itself. We keep raw `UserId` ints to stay out of relations territory; know the one-save version exists.)
+
+And the lifetime story closes its loop: "scoped `DbContext`" *means* "one unit of work per HTTP request" — the request's staged changes live and die together.
+
 ## Migrations, unpacked
 
 Open `Migrations/` — the folder Topic 5 told you to ignore. Inside `*_InitialCreate.cs`:
@@ -198,6 +219,7 @@ The punchline: `PaymentService` never knew whether it got real Postgres or a fak
 
 - `DbContext` = unit of work + change tracker, `DbSet<T>` = table, `SaveChangesAsync` = diff-and-commit; models are the schema because types exist at runtime.
 - EF *tracks changes*: mutate the entity, `SaveChangesAsync` writes the UPDATEs — vs Prisma's explicit `update({ data })`. Corollary: mutating an untracked object saves nothing.
+- Staged writes / unit of work: `Add` is memory-only (`git add`), `SaveChangesAsync` is the commit — one flush, one transaction, ids materialized via `INSERT ... RETURNING`. "In Prisma every call is a round trip; in EF, calls accumulate and flush atomically" is a one-sentence answer that shows you know both ORMs.
 - Migrations are generated, versioned C# with `Up`/`Down`, applied idempotently via `__EFMigrationsHistory` — reviewable in PRs like Prisma migration files.
 - Constraints that span rows (unique email) belong in the database, not in check-then-insert C# — the check and the write must be atomic.
 - LINQ against EF is translated from expression trees to SQL — and `.ToListAsync()` placement decides whether the database or your process does the filtering.

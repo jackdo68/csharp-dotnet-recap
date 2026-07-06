@@ -113,6 +113,64 @@ Run it several times (`dotnet run`). Watch the **buggy numbers wobble between ru
 - `lock (gate) { ... }` — a built-in mutex statement: one thread inside the block at a time, everyone else queues at the brace. The target is any shared object used as the key — by convention a dedicated `new object()`.
 - **`Interlocked` only speaks `int`/`long`** — there is no `Interlocked.Add(ref decimal, ...)` overload. Money math can't be a lone atomic instruction; it needs a critical section. That's not a library gap, it's the nature of the type — and it's why section 5 exists.
 
+## Task vs Promise — where the analogy finally breaks
+
+Topic 2 told you `Task<T>` = `Promise<T>`, and for daily code that's the right mental model. This topic's machinery is exactly where it stops being true. Four breaks, each with a practical consequence:
+
+### 1. `async` is a compiler instruction, not part of the method's contract
+
+In both languages, marking a function `async` makes the compiler rewrite it into a **state machine**: an object that remembers the local variables and *which await it's parked at*, with a resume method the runtime calls when the awaited thing finishes. (V8 does the same desugaring to JS async functions — this part is shared machinery.)
+
+The consequence C# makes visible: callers only see the return type (`Task<string>`), so a method that merely *forwards* a task doesn't need the keyword at all:
+
+```csharp
+// With async: compiler builds a state machine just to unwrap and re-wrap the task
+public async Task<string> FetchAsync() => await _http.GetStringAsync(_url);
+
+// Without async ("elided"): same contract to callers, no state machine allocated —
+// you hand back the inner Task itself and step out of the chain
+public Task<string> FetchAsync() => _http.GetStringAsync(_url);
+```
+
+JS has the identical move (`return fetch(url)` vs `return await fetch(url)`), but in C# the difference is more than style — the state machine is a real allocation and real indirection, so pass-through elision is a genuine (micro-)optimization.
+
+**The production-real caveat — when elision is a bug:** the keyword changes *when the rest of your method runs*. With `async`, a `finally`/`using` wrapping the await runs when the *work* completes; elided, it runs when the method *returns the Task* — which is immediately:
+
+```csharp
+public Task<string> FetchAsync()
+{
+    using var client = MakeClient();
+    return client.GetStringAsync(_url);   // ❌ client is DISPOSED while the request is in flight
+}
+// the async version of the same method is correct — Dispose waits for the await
+```
+
+Guidance worth repeating in an interview: default to `async`/`await`; elide only when the body is literally one `return`, with no `using`, no `try`, no code after the call.
+
+### 2. Awaiting something already finished doesn't yield — Promises always do
+
+`await Promise.resolve(1)` *always* defers: the continuation goes to the microtask queue and runs on a later tick, even though the value is right there. `await` on an already-completed `Task` takes the **synchronous fast path**: no suspension, no scheduling, same thread, keep executing — the state machine checks `IsCompleted` first and only parks if it must. Where it matters: a method that usually hits a warm cache (`Task.FromResult(cached)`) costs essentially nothing per call in .NET, while the Node equivalent pays a microtask hop every time. Small per call; visible at hot-path scale — and occasionally surprising, because code you *thought* was asynchronous ran to completion before the caller's next line.
+
+### 3. Who runs your next line: THE thread vs *a* thread
+
+Underneath, the runtimes are more alike than the folklore suggests: both do I/O with the same OS machinery (epoll/kqueue/IOCP) — neither parks a thread per request. The fork is upstairs, at continuation time. In Node, completed I/O queues your continuation for the **one** thread — that's the event loop, and it's why `state.balance += x` between awaits needs no lock and why one CPU-heavy continuation starves every other request. In .NET, completed I/O hands your continuation to **whichever pool thread is free** — that's exercise 7.3's hopping thread IDs, the reason `lock` can't contain `await` (CS1996), and the reason this topic's races exist at all. Same I/O layer, opposite concurrency contract.
+
+### 4. `.Result` exists because there's another thread to block
+
+You literally cannot block on a Promise — there's no second thread to do the waiting, so the language never grew the API. .NET has threads, so `Task` grew `.Result`/`.Wait()` — and with them the deadlock/starvation class below. A good interview line: "the footgun exists *because* the capability exists; Node avoided the bug by not having the machine."
+
+The cheat sheet:
+
+| | `Promise` | `Task` |
+|---|---|---|
+| Future value, chainable, awaitable | yes | yes |
+| `async` keyword | implementation detail (state machine) | same — and elidable on pass-throughs |
+| Await an already-settled one | always defers a microtask | synchronous fast path |
+| Continuation runs on | the one thread, via the event loop | any thread-pool thread |
+| Can carry CPU work on another core | never | yes — `Task.Run` |
+| Blocking on it | impossible | possible (`.Result`) — and forbidden by convention |
+| Cancellation | `AbortController`, bolted on | `CancellationToken`, threaded through every API |
+
 ## The async mutex — when the critical section contains `await`
 
 `lock` has a hard limitation you hit the moment you guard *database* work:
@@ -173,6 +231,8 @@ Rule of thumb: **async all the way down** — once one method is `async`, its ca
 ## Interview talking points
 
 - Concurrency vs parallelism: Node has the former; .NET has both. `await` can resume on a different thread.
+- Task ≠ Promise where it counts: completed Tasks await synchronously (no forced microtask hop), continuations run on any pool thread, and `async` is an implementation detail — a pass-through method can return the Task directly and skip the state machine. Never elide around `using`/`try`, though: the cleanup would run while the work is still in flight.
+- Both runtimes do I/O with the same OS machinery (epoll/kqueue/IOCP); the difference is who runs the continuation — the one event-loop thread vs any pool thread. Saying it this way shows you understand the layer *below* the folklore.
 - The I/O vs CPU rule, stated crisply — it's the classic trap question.
 - Race conditions: `count++` and `balance += x` are read-modify-write; fixes are `Interlocked` (atomic op, ints only), `lock` (sync critical section), `SemaphoreSlim(1,1)` (async critical section — because `await` inside `lock` is CS1996, a compile error).
 - In-process locks don't survive horizontal scaling; the durable fix for money is the database — transactions with row locks or concurrency tokens. Tie it to MVCC for the senior flourish.

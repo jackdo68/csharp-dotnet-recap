@@ -121,17 +121,82 @@ Thread A: read 5 → add 1 → write 6
 Thread B: read 5 → add 1 → write 6  ← both wrote 6, one increment lost
 ```
 
-**The fixes:**
+## The three fixes
 
-| Fix | Use when | Example |
-|-----|----------|---------|
-| `Interlocked` | Single `int`/`long` operation | `Interlocked.Increment(ref flagged)` |
-| `lock` | Multi-step critical section (sync only) | `lock (gate) { ... }` |
-| `SemaphoreSlim` | Critical section with `await` | See below |
+| Fix | Use when | Works with `await`? |
+|-----|----------|---------------------|
+| `Interlocked` | Single `int`/`long` operation | N/A (no critical section) |
+| `lock` | Multi-step critical section | ❌ No — compiler error CS1996 |
+| `SemaphoreSlim` | Critical section with `await` | ✅ Yes |
 
-### The money bug
+### 1. `Interlocked` — atomic operations
 
-Your `TransferAsync` has the same problem:
+For single `int`/`long` operations only:
+
+```csharp
+int flagged = 0;
+
+// ❌ Race condition
+flagged++;
+
+// ✅ Atomic — no race
+Interlocked.Increment(ref flagged);
+```
+
+⚠️ **Limitation:** Only works on `int`/`long`. No `decimal` support — money needs `lock` or `SemaphoreSlim`.
+
+### 2. `lock` — sync critical section
+
+For multi-step operations **without** `await`:
+
+```csharp
+private readonly object _gate = new();
+
+public void AddToTotal(decimal amount)
+{
+    lock (_gate)
+    {
+        // Only one thread at a time in here
+        _total += amount;
+        _count++;
+    }
+}
+```
+
+⚠️ **Limitation:** Can't contain `await` — compiler error CS1996. Why? After `await`, a different thread may resume, but `lock` must be released by the same thread that acquired it.
+
+### 3. `SemaphoreSlim` — async critical section
+
+For critical sections **with** `await`:
+
+```csharp
+private static readonly SemaphoreSlim _gate = new(1, 1);  // 1 slot = mutex
+
+public async Task TransferAsync(...)
+{
+    await _gate.WaitAsync();   // async "lock"
+    try
+    {
+        var payer = await _db.Users.FirstOrDefaultAsync(...);
+        // ... safe to read-check-modify here ...
+        await _db.SaveChangesAsync();
+    }
+    finally
+    {
+        _gate.Release();       // ALWAYS release in finally
+    }
+}
+```
+
+| Sync | Async |
+|------|-------|
+| `lock (gate) { ... }` | `await _gate.WaitAsync(); try { ... } finally { _gate.Release(); }` |
+
+⚠️ **Limitation:** Only works **within one process**. Multiple API replicas = each has its own gate = race returns. Production fix: database row locks (`SELECT ... FOR UPDATE`) or optimistic concurrency.
+
+## The money bug
+
+Your `TransferAsync` has the race condition:
 
 ```csharp
 var payer = await _db.Users.FirstOrDefaultAsync(...);  // READ  balance = 800
@@ -142,8 +207,13 @@ await _db.SaveChangesAsync();                           // WRITE: both write 790
 ```
 
 **Why simple fixes don't work:**
-- `Interlocked` — only works on `int`/`long`, not `decimal`
-- `lock` — can't contain `await` (compiler error CS1996)
+
+| Fix | Why it fails |
+|-----|--------------|
+| `Interlocked` | Only works on `int`/`long`, not `decimal` |
+| `lock` | Can't contain `await` (CS1996) |
+
+**The fix:** `SemaphoreSlim(1, 1)` — see section above.
 
 ## Task vs Promise — where the analogy breaks
 
@@ -186,33 +256,6 @@ Both use the same OS async I/O (epoll/kqueue/IOCP). The difference is *who runs 
 - .NET: any free pool thread
 
 This is why `lock` can't contain `await` (CS1996) — thread that took the lock may not be the thread that releases it.
-
-## The async mutex: `SemaphoreSlim`
-
-`lock` can't contain `await` (CS1996). The fix: `SemaphoreSlim(1, 1)`.
-
-```csharp
-private static readonly SemaphoreSlim _transferGate = new(1, 1);  // 1 slot = mutex
-
-public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount)
-{
-    await _transferGate.WaitAsync();   // async "lock"
-    try
-    {
-        // read-check-modify — now one-at-a-time
-    }
-    finally
-    {
-        _transferGate.Release();       // ALWAYS release
-    }
-}
-```
-
-| Sync | Async |
-|------|-------|
-| `lock (gate) { ... }` | `await _gate.WaitAsync(); try { ... } finally { _gate.Release(); }` |
-
-⚠️ **Limitation:** `SemaphoreSlim` only works **within one process**. Multiple API replicas = each has its own gate = race returns. Production fix: database row locks (`SELECT ... FOR UPDATE`) or optimistic concurrency.
 
 ## Tool cheat sheet
 

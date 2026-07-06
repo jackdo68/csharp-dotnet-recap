@@ -259,15 +259,59 @@ Topic 2 said `Task<T>` ≈ `Promise<T>`. That's true for daily code. Here's wher
 | CPU work on another core | Never (without workers) | Yes — `Task.Run` |
 | Cancellation | `AbortController` (bolted on) | `CancellationToken` (built in) |
 
-### Key implications
+### What is a state machine?
 
-**1. `async` is elidable** — pass-through methods can skip the keyword:
+When you write `async`, the compiler transforms your method into a **state machine** — a class that tracks where to resume after each `await`.
 
 ```csharp
-// With async: builds a state machine
+public async Task<string> GetDataAsync()
+{
+    var user = await _db.GetUserAsync();     // pause point 1
+    var orders = await _db.GetOrdersAsync(); // pause point 2
+    return $"{user.Name}: {orders.Count}";
+}
+```
+
+**What the compiler generates (simplified):**
+
+```csharp
+class GetDataAsyncStateMachine
+{
+    int _state = 0;          // which pause point are we at?
+    User _user;              // local variables survive across pauses
+
+    void MoveNext()
+    {
+        switch (_state)
+        {
+            case 0:  // start → pause point 1
+                _state = 1;
+                _db.GetUserAsync()...  // schedule continuation
+                return;
+            case 1:  // pause point 1 → pause point 2
+                _user = result;
+                _state = 2;
+                _db.GetOrdersAsync()...
+                return;
+            case 2:  // done
+                SetResult($"{_user.Name}: ...");
+                return;
+        }
+    }
+}
+```
+
+Each `await` = a pause point. The state machine remembers where you were and resumes there when the Task completes.
+
+### `async` is elidable
+
+Pass-through methods can skip the keyword — avoids state machine overhead:
+
+```csharp
+// With async: builds a state machine (unnecessary)
 public async Task<T> GetAsync() => await _inner.GetAsync();
 
-// Without async: same contract, no state machine
+// Without async: no state machine — just returns the Task directly
 public Task<T> GetAsync() => _inner.GetAsync();
 ```
 
@@ -281,11 +325,13 @@ public Task<string> FetchAsync()
 }
 ```
 
-**2. Same I/O layer, different continuation model**
+### Same I/O layer, different continuation model
 
 Both use the same OS async I/O (epoll/kqueue/IOCP). The difference is *who runs your next line*:
-- Node: the one event-loop thread
-- .NET: any free pool thread
+
+| | Node | .NET |
+|-|------|------|
+| After `await` resumes on | The one event-loop thread | Any free pool thread |
 
 This is why `lock` can't contain `await` (CS1996) — thread that took the lock may not be the thread that releases it.
 
@@ -300,16 +346,49 @@ This is why `lock` can't contain `await` (CS1996) — thread that took the lock 
 | `lock` | Sync critical section | mutex |
 | `SemaphoreSlim(1,1)` | Async critical section (with `await`) | mutex |
 
-## The deadlock rule
+## The golden rule: async all the way down
 
-Never use `.Result` or `.Wait()`:
+Once one method is `async`, callers should be too.
 
 ```csharp
-var result = ScanAsync(bytes).Result;  // ❌ can deadlock
-var result = await ScanAsync(bytes);   // ✅ always
+// ❌ BAD — blocks a thread, can deadlock
+public User GetUser()
+{
+    return _db.GetUserAsync().Result;  // DON'T DO THIS
+}
+
+// ✅ GOOD — async all the way
+public async Task<User> GetUserAsync()
+{
+    return await _db.GetUserAsync();
+}
 ```
 
-**Rule:** async all the way down. Once one method is `async`, its callers should be too.
+**Why `.Result` / `.Wait()` is dangerous:**
+
+| Problem | What happens |
+|---------|--------------|
+| Thread blocked | Pool thread sits waiting instead of doing other work |
+| Deadlock risk | In some contexts, the continuation needs the blocked thread → deadlock |
+| Pool exhaustion | Many blocked threads → no threads left → requests queue up |
+
+**The pattern:**
+
+```
+Controller (async) → Service (async) → Repository (async) → DbContext (async)
+     ↓                    ↓                   ↓                    ↓
+  await               await               await                await
+```
+
+**One exception:** `Main` or top-level code where you *must* block:
+
+```csharp
+// Console app entry point — this is OK
+public static void Main()
+{
+    RunAsync().GetAwaiter().GetResult();  // accepted pattern at the very top
+}
+```
 
 ## Interview talking points
 
@@ -317,11 +396,9 @@ var result = await ScanAsync(bytes);   // ✅ always
 - **Concurrency vs parallelism:** Node has concurrency; .NET has both. `await` can resume on a different thread.
 - **I/O vs CPU rule:** Reading files = I/O (`await`). Hashing/scanning = CPU (`Task.Run`/`Parallel`).
 - **The nuance:** In ASP.NET there's no event loop to "unblock" — `Task.Run` doesn't add throughput. It pays off when parallelizing a *batch* across cores.
-- **Task ≠ Promise:**
-  - Completed Tasks await synchronously (no microtask hop)
-  - Continuations run on any pool thread
-  - `async` is elidable — but never around `using`/`try`
+- **State machine:** `async` makes the compiler generate a state machine to track pause points. Eliding `async` on pass-through methods avoids this overhead — but never elide around `using`/`try`.
+- **Task ≠ Promise:** Completed Tasks await synchronously (no microtask hop). Continuations run on any pool thread.
 - **Under the hood:** Both runtimes use the same OS async I/O (epoll/kqueue/IOCP). The difference is who runs the continuation: one thread (Node) vs any pool thread (.NET).
 - **Race fixes:** `Interlocked` (ints), `lock` (sync), `SemaphoreSlim` (async). `await` inside `lock` = CS1996.
 - **Scaling caveat:** In-process locks don't survive multiple replicas. Production fix: database row locks or optimistic concurrency.
-- **Golden rule:** Never `.Result`/`.Wait()` — async all the way down.
+- **Golden rule:** Never `.Result`/`.Wait()` — async all the way down. Blocks thread, risks deadlock, exhausts pool.

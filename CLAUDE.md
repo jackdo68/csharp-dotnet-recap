@@ -34,9 +34,9 @@ A topic is a folder `topics/topic-N-<slug>/` containing exactly `lesson.md` and 
 1. `site/astro.config.mjs` — the sidebar group (`label` + `autogenerate.directory`)
 2. `site/src/content/docs/index.mdx` — the topic's `<LinkCard>`
 
-Also keep in sync when the 5–9 arc changes:
+Also keep in sync when the 5–10 arc changes:
 
-- The **build-line banner** (blockquote at the top of each `exercises.md` for Topics 5–9: "**The PaymentApp build:** …") — one chain, bolded segment per page.
+- The **build-line banner** (blockquote at the top of each `exercises.md` for Topics 5–10: "**The PaymentApp build:** …") — one chain, bolded segment per page. Every page's banner must list all ten-arc segments with the current topic bolded.
 - Topic cross-references inside lessons ("Topic 3", "Topic 7") are plain text — grep for the topic number when renumbering.
 
 ## Content conventions (the important part)
@@ -44,6 +44,10 @@ Also keep in sync when the 5–9 arc changes:
 ### This is a learning project — explain every step
 
 Every exercise step and every solution carries a clear explanation of *why*, not just *what* — the reader should never execute a command or paste code they can't account for. Keep things simple **but practical**: prefer teaching through real production failure modes (a race condition that loses money, an env var silently beating a config file, `localhost` lying inside a container, a signing-key rotation logging everyone out) over toy abstractions. If a simplification is used (password grant, in-process locks, shared DB), say so explicitly and name the production-grade alternative.
+
+### Teach the machine, not just the API — *why* Node does X vs *how* .NET does it
+
+The reader wants the layer *below* the syntax. When there's a behavioral difference, explain the underlying runtime mechanism on both sides, not just the two APIs: Node's single thread + event loop + microtask queue vs the CLR's real thread pool; V8 desugaring async into state machines vs Roslyn doing the same; both using the same OS async I/O (epoll/kqueue/IOCP) but handing the continuation to *the* event-loop thread vs *any* pool thread. The best moments in the course correct an over-simplification the reader already believes ("I thought a `Task` was just a `Promise`") — so when an earlier topic gives a useful-but-lossy analogy (`Task` = `Promise`), a later topic must explicitly break it down (completed Tasks await synchronously, continuations hop threads, `async` is an elidable state-machine detail, `.Result` exists only because a second thread exists). Prefer mechanism ("the continuation resumes on a free pool thread") over folklore ("C# is multi-threaded"). Topic 7 is the anchor for this; the EF unit-of-work / staged-writes material in Topic 6 (`Add` = `git add`, `SaveChanges` = commit; id is 0 until flush) is the same instinct applied to the data layer.
 
 ### The audience rule — compare against strict TypeScript, not plain JavaScript
 

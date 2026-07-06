@@ -13,6 +13,11 @@ export default defineConfig({
         'C# and .NET for Node.js + TypeScript developers — the fundamental differences, taught by building a Payment API.',
       logo: { src: './src/assets/logo.svg', alt: 'C# .NET Recap' },
       favicon: '/favicon.svg',
+      expressiveCode: {
+        // Wrap long lines instead of forcing a horizontal scrollbar.
+        // preserveIndent keeps wrapped continuation lines aligned under their code.
+        defaultProps: { wrap: true, preserveIndent: true },
+      },
       head: [
         // Social preview (Open Graph + Twitter). Absolute URLs required.
         { tag: 'meta', attrs: { property: 'og:image', content: 'https://jackdo68.github.io/csharp-dotnet-recap/og.png' } },

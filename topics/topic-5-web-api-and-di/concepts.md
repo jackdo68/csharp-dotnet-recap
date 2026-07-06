@@ -132,6 +132,26 @@ Read the registrations through that lens — each chose deliberately:
 
 That second row has real teeth: a longer-lived service holding a shorter-lived dependency is a **captive dependency**, and the container refuses to build one — Hands On makes you trigger that refusal on purpose and read the error.
 
+> **"Scoped" ≠ "a database connection per request."** The `DbContext` is a *session* — the change tracker and unit-of-work bookkeeping — and it's cheap; that's what's per-request. The physical Postgres connection is a separate layer with a shorter lifetime: EF Core rents one from Npgsql's **connection pool** only when it actually hits the DB (a query, `SaveChangesAsync`) and returns it the instant that operation finishes — not at the end of the request (a transaction is the exception; it holds one open). So concurrent requests each get their own `DbContext` but share a pool of ~100 reused connections — exactly like `pg`/Prisma, where each query borrows from a pool rather than opening a new `pg.Client`. (This is also *why* `DbContext` isn't thread-safe — one sequential session — while the pool underneath it is.)
+
+### What's actually in memory while the app runs — two tiers
+
+The lifetimes split everything into two tiers, and the split *is* the design:
+
+- **Tier 1 — resident for the whole process** (built once at startup, disposed only at shutdown): the **container** itself, the **registrations** (the `interface → implementation + lifetime` *recipes* — the container keeps the recipe forever and mints instances from it), and every **singleton** — `IPasswordHasher<User>`, config, logging, `IHttpClientFactory`, and Npgsql's **connection pool with its live TCP connections**.
+- **Tier 2 — created per request, released at request end**: the request **scope**, the **controller**, the **scoped** services (`DbContext`, `AuthService`, `PaymentService`), and any transients. When the response is sent, the scope is disposed — scoped `IDisposable`s get `Dispose()`d deterministically (the `DbContext` returns its connection to the pool), then the objects become garbage the GC reclaims later.
+
+| Per request, freed after? | | Resident for app lifetime? | |
+|---|---|---|---|
+| controller instance | **yes** | the container | **no** (stays) |
+| `AuthService` / `PaymentService` | **yes** | the registrations (recipes) | **no** (stays) |
+| `PaymentDbContext` instance | **yes** (session ends) | singletons (hasher, config) | **no** (stays) |
+| the DB *connection* it used | **no** — back to the pool | the connection pool + its sockets | **no** (stays) |
+
+The trade in one line: you pay a fixed cost — the container, the recipes, and the singletons stay in memory — so that minting a fresh controller + service + `DbContext` per request is cheap and their resources release deterministically the moment the response is sent. **Node anchor:** your Express app already has this shape informally — a module-level `new Pool()` / singleton Prisma client lives for the process (Tier 1) while each handler's locals die per request (Tier 2); .NET just names the two tiers (`AddSingleton` vs `AddScoped`) and adds a deterministic `Dispose` at the request boundary.
+
+> **Watch out:** fire-and-forget work that outlives the response (`_ = Task.Run(() => useTheDbContext())`) will hit `ObjectDisposedException` — the scope disposed the `DbContext` out from under it. The fix is a fresh scope via `IServiceScopeFactory`, which is exactly Topic 10's background-auditor pattern.
+
 ## Trace one request (so the magic is mechanical)
 
 1. `POST /v1/payment/transfer` arrives; ASP.NET Core matches it to `PaymentController.Transfer`.

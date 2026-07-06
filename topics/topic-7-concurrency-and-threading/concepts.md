@@ -65,9 +65,40 @@ public async Task<ActionResult<ScanResult>> Upload(int userId, IFormFile file)
 In Node, CPU work blocks *the* event loop — you must offload to `worker_threads`.
 
 In .NET:
-- Each request already runs on its own pool thread
+- Each request runs on a pool thread (not *the* thread)
 - One CPU-heavy request doesn't block others
 - `Task.Run` doesn't "unblock the server" — it just moves work to another pool thread
+
+### How the thread pool actually works
+
+**No, it doesn't spawn a new thread per request.**
+
+| Aspect | How it works |
+|--------|--------------|
+| Pool size | Starts at ~1 thread per core. Grows on demand. |
+| Reuse | Threads are **reused**. Finished request → thread returns to pool. |
+| Max threads | Default ~32,767. In practice, OS/memory limits hit first. |
+| Growth rate | Adds ~1-2 threads/second when pool is exhausted (slow on purpose). |
+| Shrink | Idle threads retire after ~15–20 seconds. |
+
+**The key insight:** Threads are expensive to create (~1MB stack each). The pool avoids this by **reusing** them.
+
+### Thread pool vs event loop — trade-offs
+
+| | Node (event loop) | .NET (thread pool) |
+|-|-------------------|-------------------|
+| **Memory per connection** | ~tens of KB | ~1MB per thread |
+| **Max concurrent requests** | Very high (limited by memory) | Limited by thread pool size |
+| **CPU-bound work** | Blocks everything | Runs on other threads |
+| **Context switching** | None (one thread) | Yes (OS switches threads) |
+| **Best for** | Many I/O-bound connections | Mixed I/O + CPU workloads |
+
+**Why .NET can still handle thousands of requests:**
+- During `await`, the thread returns to the pool (no thread held during I/O)
+- Only requests actively executing code hold a thread
+- Same trick as Node — just with many threads instead of one
+
+⚠️ **The danger:** If all threads are blocked (e.g., `.Result` calls or slow sync code), the pool is exhausted → requests queue up → timeouts.
 
 **When `Task.Run` actually helps:** batches across cores.
 
@@ -207,6 +238,7 @@ var result = await ScanAsync(bytes);   // ✅ always
 
 ## Interview talking points
 
+- **Thread pool:** Not a new thread per request. Pool starts at ~1 per core, reuses threads. During `await`, thread returns to pool.
 - **Concurrency vs parallelism:** Node has concurrency; .NET has both. `await` can resume on a different thread.
 - **I/O vs CPU rule:** Reading files = I/O (`await`). Hashing/scanning = CPU (`Task.Run`/`Parallel`).
 - **The nuance:** In ASP.NET there's no event loop to "unblock" — `Task.Run` doesn't add throughput. It pays off when parallelizing a *batch* across cores.

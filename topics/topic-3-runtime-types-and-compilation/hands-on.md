@@ -1,26 +1,26 @@
-# Topic 3: Exercises & Solutions
+# Topic 3: Hands On
 
-Create a fresh console app `LoanReflection` for these (`dotnet new console -n LoanReflection`). Reuse the `LoanApplication` class and `Money` record from Topic 2. Try each exercise before reading its solution.
+Create a fresh console app `PaymentReflection` for these (`dotnet new console -n PaymentReflection`). Reuse the `Transfer` class and `Money` record from Topic 2. Try each exercise before reading its solution.
 
 ## Exercise 3.1 — Find the IL
 
 1. Build the project (don't run it) and locate the compiled output.
-2. Run the `.dll` directly: `dotnet bin/Debug/net10.0/LoanReflection.dll`. Convince yourself the `.dll` *is* the program.
+2. Run the `.dll` directly: `dotnet bin/Debug/net10.0/PaymentReflection.dll`. Convince yourself the `.dll` *is* the program.
 3. In one sentence: why can this same `.dll` run on a Windows machine?
 
 **Solution**
 
 ```bash
 dotnet build
-ls bin/Debug/net10.0/          # LoanReflection.dll + launcher
-dotnet bin/Debug/net10.0/LoanReflection.dll
+ls bin/Debug/net10.0/          # PaymentReflection.dll + launcher
+dotnet bin/Debug/net10.0/PaymentReflection.dll
 ```
 
 Why it runs on Windows too: the `.dll` contains **IL, not machine code**. Each platform's CLR JIT-compiles the same IL to that machine's native code — portability lives one level below your program, exactly like the same `.js` file running in any V8.
 
 ## Exercise 3.2 — A model inspector
 
-Write a method `void Inspect(Type t)` that prints a type's name and each property as `Name: TypeName`. Call it with `typeof(LoanApplication)` and `typeof(Money)`.
+Write a method `void Inspect(Type t)` that prints a type's name and each property as `Name: TypeName`. Call it with `typeof(Transfer)` and `typeof(Money)`.
 
 Then answer: how would you get this information in TypeScript at runtime? (Trick question — reason out why you can't.)
 
@@ -34,15 +34,16 @@ void Inspect(Type t)
         Console.WriteLine($"  {p.Name}: {p.PropertyType.Name}");
 }
 
-Inspect(typeof(LoanApplication));
+Inspect(typeof(Transfer));
 Inspect(typeof(Money));
 ```
 
 Output:
 
 ```
-== LoanApplication ==
-  ApplicantName: String
+== Transfer ==
+  From: String
+  To: String
   Amount: Decimal
   Status: String
 == Money ==
@@ -66,7 +67,7 @@ T MakeDefault<T>() where T : new()
     return new T();
 }
 
-var loan = MakeDefault<LoanApplication>();   // "T is LoanApplication"
+var transfer = MakeDefault<Transfer>();   // "T is Transfer"
 ```
 
 (`Money` has no parameterless constructor — positional records get a constructor requiring all values — so `MakeDefault<Money>()` fails the `new()` constraint at **compile time**. A generic constraint doing real work; if you hit this, nice catch.)
@@ -81,14 +82,14 @@ Console.WriteLine(typeof(List<int>) == typeof(List<string>));   // False
 
 ## Exercise 3.4 — Runtime type tests
 
-Fill a `List<object>` with a mixed bag: a `LoanApplication`, a `Money`, a `string`, an `int`. Loop over it and use `is` pattern matching to print a different line per type, including one property access on your own types (e.g. the loan's amount). No casts, no `as`, no exceptions.
+Fill a `List<object>` with a mixed bag: a `Transfer`, a `Money`, a `string`, an `int`. Loop over it and use `is` pattern matching to print a different line per type, including one property access on your own types (e.g. the transfer's amount). No casts, no `as`, no exceptions.
 
 **Solution**
 
 ```csharp
 var mixed = new List<object>
 {
-    new LoanApplication { ApplicantName = "Alice", Amount = 300_000 },
+    new Transfer { From = "Alice", To = "Bob", Amount = 300m },
     new Money(500, "AUD"),
     "just a string",
     42,
@@ -96,8 +97,8 @@ var mixed = new List<object>
 
 foreach (var item in mixed)
 {
-    if (item is LoanApplication loan)
-        Console.WriteLine($"Loan for {loan.ApplicantName}: ${loan.Amount}");
+    if (item is Transfer transfer)
+        Console.WriteLine($"Transfer from {transfer.From}: ${transfer.Amount}");
     else if (item is Money money)
         Console.WriteLine($"Money: {money.Amount} {money.Currency}");
     else if (item is string s)
@@ -107,4 +108,4 @@ foreach (var item in mixed)
 }
 ```
 
-`item is LoanApplication loan` is a **real runtime type test** plus narrowing in one expression — the CLR checks the object's actual type metadata. The TS analogue (`instanceof` or a hand-written type-guard predicate) either only works for classes or is an unverified promise; here the runtime itself is the judge.
+`item is Transfer transfer` is a **real runtime type test** plus narrowing in one expression — the CLR checks the object's actual type metadata. The TS analogue (`instanceof` or a hand-written type-guard predicate) either only works for classes or is an unverified promise; here the runtime itself is the judge.

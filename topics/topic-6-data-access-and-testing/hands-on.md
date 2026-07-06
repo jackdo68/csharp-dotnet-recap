@@ -1,8 +1,8 @@
-# Topic 6: Exercises & Solutions
+# Topic 6: Hands On
 
 > **The PaymentApp build:** Topic 5 the API is born — straight onto Postgres → **Topic 6 (you are here): EF Core unpacked + tests** → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
 
-Work through the lesson first (DbContext/change-tracking/migrations mental model, the unique-email index + its migration, the `PaymentApp.Tests` project). Try each exercise before reading its solution.
+Work through Concepts first (DbContext/change-tracking/migrations mental model, the unique-email index + its migration, the `PaymentApp.Tests` project). Try each exercise before reading its solution.
 
 ## Exercise 6.1 — Read your own schema
 
@@ -17,7 +17,7 @@ You've been running against this schema since Topic 5 — now verify what the mi
    docker compose exec db psql -U payapp -c '\dt'
    ```
 
-   Where did `numeric` and `text` come from? Why is `"Accounts"` quoted? Find the unique index from the lesson — and identify the one table you never created.
+   Where did `numeric` and `text` come from? Why is `"Accounts"` quoted? Find the unique index from Concepts — and identify the one table you never created.
 
 **Solution**
 
@@ -32,11 +32,11 @@ You've been running against this schema since Topic 5 — now verify what the mi
  Balance   | numeric | not null
 ```
 
-The column types came from your **C# property types, read by reflection** (Topic 3): `decimal` → `numeric` — a *real* arbitrary-precision type, exactly why money is `decimal` end to end. `Id` became the identity PK purely by naming convention. On `"Users"` you'll find `"IX_Users_Email" UNIQUE` — the lesson's one `OnModelCreating` line, now a database constraint. The quotes: EF generates case-sensitive PascalCase identifiers, and unquoted names in Postgres fold to lowercase — so `psql` needs the quotes to find the table. And `\dt` reveals **`__EFMigrationsHistory`** — the table you never created: EF's ledger of applied migrations, which is how `database update` knows what's already done.
+The column types came from your **C# property types, read by reflection** (Topic 3): `decimal` → `numeric` — a *real* arbitrary-precision type, exactly why money is `decimal` end to end. `Id` became the identity PK purely by naming convention. On `"Users"` you'll find `"IX_Users_Email" UNIQUE` — Concepts' one `OnModelCreating` line, now a database constraint. The quotes: EF generates case-sensitive PascalCase identifiers, and unquoted names in Postgres fold to lowercase — so `psql` needs the quotes to find the table. And `\dt` reveals **`__EFMigrationsHistory`** — the table you never created: EF's ledger of applied migrations, which is how `database update` knows what's already done.
 
 ## Exercise 6.2 — Duplicate email: whose job is the rule?
 
-The lesson argued check-then-insert can't enforce uniqueness. Prove the *database* does, then make the API respond politely:
+Concepts argued check-then-insert can't enforce uniqueness. Prove the *database* does, then make the API respond politely:
 
 1. Register the same email twice. What status does the second attempt return right now, and what exception type is in the console stack trace?
 2. Catch it in the controller and return **409 Conflict** with a friendly error instead.
@@ -63,7 +63,7 @@ catch (DbUpdateException)        // unique index violation surfaces here
 
 (Catching `DbUpdateException` in the controller means adding `using Microsoft.EntityFrameworkCore;` — some teams prefer translating it into a domain exception inside the service so controllers never see EF types. Either way, the *catch-by-type* routing is Topic 4 again.)
 
-3. A pre-check reads, then inserts — two steps. Two simultaneous registrations can both pass the check, then both insert. The unique index is the only arbiter that operates *atomically at the moment of write* — the pre-check can improve the error message, never the guarantee. This is your first taste of the lesson Topic 7 generalizes: **check-then-act on shared state is a race unless something atomic enforces it.**
+3. A pre-check reads, then inserts — two steps. Two simultaneous registrations can both pass the check, then both insert. The unique index is the only arbiter that operates *atomically at the moment of write* — the pre-check can improve the error message, never the guarantee. This is your first taste of Concepts Topic 7 generalizes: **check-then-act on shared state is a race unless something atomic enforces it.**
 
 ## Exercise 6.3 — Migrations round-trip, eyes open
 
@@ -91,7 +91,7 @@ docker compose exec db psql -U payapp -c '\d "Users"'    # CreatedAt | timestamp
 
 In `PaymentApp.Tests`:
 
-1. Type in and run the lesson's three tests (register/transfer/insufficient-funds).
+1. Type in and run Concepts' three tests (register/transfer/insufficient-funds).
 2. Add a test for `DepositAsync` from Topic 5's exercises: deposit → balance grows; deposit to user 999 → *assert the exception type*.
 3. Add a `[Theory]` with `[InlineData]` covering transfer amounts `0.01`, `500`, `1000` (the whole balance) — assert the money is **conserved**: payer + payee always total 2000.
 4. One reasoning question: the unique-email rule from 6.2 — can these tests verify it? Try registering two users with the same email in a test and see.

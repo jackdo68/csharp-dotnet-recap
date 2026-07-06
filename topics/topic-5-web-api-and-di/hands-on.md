@@ -1,12 +1,12 @@
-# Topic 5: Exercises & Solutions
+# Topic 5: Hands On
 
 > **The PaymentApp build:** **Topic 5 (you are here): the API is born — straight onto Postgres** → Topic 6 EF Core unpacked + tests → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
 
-Build the API from the lesson first (type it in, don't paste), then extend it. Try each exercise before reading its solution. Budget ~90 minutes for the build plus all four exercises.
+Build the API from Concepts first (type it in, don't paste), then extend it. Try each exercise before reading its solution. Budget ~90 minutes for the build plus all four exercises.
 
-## Exercise 5.0 — Build the lesson's API, in dependency order
+## Exercise 5.0 — Build Concepts' API, in dependency order
 
-Scaffold (`dotnet new webapi --use-controllers -n PaymentApp`, delete the WeatherForecast files, add the three packages), write the compose file, `docker compose up -d`, then type the lesson's files **bottom of the dependency chain upward** — each file only references files that already exist:
+Scaffold (`dotnet new webapi --use-controllers -n PaymentApp`, delete the WeatherForecast files, add the three packages), write the compose file, `docker compose up -d`, then type Concepts' files **bottom of the dependency chain upward** — each file only references files that already exist:
 
 1. `Models/User.cs` and `Models/Account.cs` — the entities
 2. `Models/Requests.cs` — the DTOs (records: `RegisterRequest`, `TransferRequest`, `UserResponse`)
@@ -76,7 +76,7 @@ The last row is the one to internalize: Topic 4's boundary enforcement rejected 
 
 ## Exercise 5.2 — Break the lifetimes: the captive dependency
 
-The lesson claimed "a service's lifetime is bounded by its shortest-lived dependency." Prove the container enforces it:
+Concepts claimed "a service's lifetime is bounded by its shortest-lived dependency." Prove the container enforces it:
 
 1. Change the service registration to `AddSingleton<IPaymentService, PaymentService>();` and restart. What happens — and *when* does it happen (first request, or earlier)?
 2. Read the error aloud and explain in your own words *why* this combination is dangerous enough to refuse outright. What would actually go wrong if the container allowed it?

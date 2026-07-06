@@ -1,4 +1,4 @@
-# Topic 8: Exercises & Solutions
+# Topic 8: Hands On
 
 > **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → Topic 7 the transfer race → **Topic 8 (you are here): Docker & ship** → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
 

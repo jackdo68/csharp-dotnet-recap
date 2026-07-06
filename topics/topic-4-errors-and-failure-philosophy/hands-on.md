@@ -1,6 +1,6 @@
-# Topic 4: Exercises & Solutions
+# Topic 4: Hands On
 
-Create a console app `LoanErrors` (`dotnet new console -n LoanErrors`). You'll need `using System.Text.Json;` for 4.2. Try each exercise before reading its solution.
+Create a console app `PaymentErrors` (`dotnet new console -n PaymentErrors`). You'll need `using System.Text.Json;` for 4.2. Try each exercise before reading its solution.
 
 ## Exercise 4.1 — Parse vs TryParse
 
@@ -33,44 +33,44 @@ else
 
 ## Exercise 4.2 — The boundary enforcer (this is the big one)
 
-You receive loan JSON from an "API". Define `record LoanRequest(string ApplicantName, decimal Amount);`
+You receive transfer JSON from an "API". Define `record TransferRequest(string To, decimal Amount);` — the same DTO shape Topic 5's `/v1/payments/transfer` endpoint binds.
 
-1. Deserialize a **valid** payload: `{"ApplicantName":"Alice","Amount":300000}` and print the result.
-2. Deserialize a **wrong-shaped** payload: `{"ApplicantName":"Alice","Amount":"lots"}`. What exception, and what does its message tell you about *where* the mismatch is?
-3. Now write out what your TS service would have done with the same two payloads and `as LoanRequest` — at what point would you have discovered the problem, and in which file?
-4. Bonus: deserialize `{"applicantName":"alice","amount":1}` (lowercase keys). What happens, and which `JsonSerializerOptions` setting explains web-API behaviour?
+1. Deserialize a **valid** payload: `{"To":"Bob","Amount":300}` and print the result.
+2. Deserialize a **wrong-shaped** payload: `{"To":"Bob","Amount":"lots"}`. What exception, and what does its message tell you about *where* the mismatch is?
+3. Now write out what your TS service would have done with the same two payloads and `as TransferRequest` — at what point would you have discovered the problem, and in which file?
+4. Bonus: deserialize `{"to":"bob","amount":1}` (lowercase keys). What happens, and which `JsonSerializerOptions` setting explains web-API behaviour?
 
 **Solution**
 
 ```csharp
 using System.Text.Json;
 
-record LoanRequest(string ApplicantName, decimal Amount);
+record TransferRequest(string To, decimal Amount);
 
 // 1. Valid — works:
-var good = JsonSerializer.Deserialize<LoanRequest>(
-    """{"ApplicantName":"Alice","Amount":300000}""");
-Console.WriteLine($"{good!.ApplicantName}: {good.Amount}");
+var good = JsonSerializer.Deserialize<TransferRequest>(
+    """{"To":"Bob","Amount":300}""");
+Console.WriteLine($"{good!.To}: {good.Amount}");
 
 // 2. Wrong shape:
-var bad = JsonSerializer.Deserialize<LoanRequest>(
-    """{"ApplicantName":"Alice","Amount":"lots"}""");
+var bad = JsonSerializer.Deserialize<TransferRequest>(
+    """{"To":"Bob","Amount":"lots"}""");
 // System.Text.Json.JsonException:
 //   The JSON value could not be converted to System.Decimal.
-//   Path: $.Amount | LineNumber: 0 | BytePositionInLine: 33.
+//   Path: $.Amount | LineNumber: 0 | BytePositionInLine: 26.
 ```
 
 The exception names the **property** (`$.Amount`), the expected type, and the position — at the boundary, before the bad data touches your code. (The `"""..."""` is a *raw string literal* — no escaping quotes, like backticks without interpolation.)
 
-**3. The TS version:** `const loan = await res.json() as LoanRequest` succeeds for both payloads. The bad one gives you `loan.Amount === "lots"` — a string wearing a `decimal`'s badge. You discover it later: maybe `loan.Amount * 1.05` → `NaN` in an interest calculation three modules away, maybe a corrupt DB row next week. The file in the stack trace is the *victim*, not the culprit. This is precisely the gap Zod fills — and here the deserializer just *is* Zod.
+**3. The TS version:** `const transfer = await res.json() as TransferRequest` succeeds for both payloads. The bad one gives you `transfer.Amount === "lots"` — a string wearing a `decimal`'s badge. You discover it later: maybe `transfer.Amount * 1.01` → `NaN` in a fee calculation three modules away, maybe a corrupt DB row next week. The file in the stack trace is the *victim*, not the culprit. This is precisely the gap Zod fills — and here the deserializer just *is* Zod.
 
-**4. Case sensitivity:** with default options the lowercase keys don't match, and (for a positional record) deserialization fails — or with a plain class you'd get defaults. ASP.NET Core's web defaults set `PropertyNameCaseInsensitive = true` (and emit camelCase), which is why controllers happily accept `{"applicantName": ...}` from JS clients. Worth knowing the friendliness lives in *options*, not the language.
+**4. Case sensitivity:** with default options the lowercase keys don't match, and (for a positional record) deserialization fails — or with a plain class you'd get defaults. ASP.NET Core's web defaults set `PropertyNameCaseInsensitive = true` (and emit camelCase), which is why controllers happily accept `{"to": ...}` from JS clients. Worth knowing the friendliness lives in *options*, not the language.
 
 ## Exercise 4.3 — Soft vs throwing lookups
 
-Build `var loans = new List<LoanRequest>();` (empty) and `var byId = new Dictionary<int, LoanRequest>();` (empty).
+Build `var transfers = new List<TransferRequest>();` (empty) and `var byId = new Dictionary<int, TransferRequest>();` (empty).
 
-1. Trigger the throwing version of each lookup: `loans.First()` and `byId[42]`. Note both exception types.
+1. Trigger the throwing version of each lookup: `transfers.First()` and `byId[42]`. Note both exception types.
 2. Rewrite both with the soft versions (`FirstOrDefault`, `TryGetValue`) and handle the miss.
 3. One sentence: which behaviour is the TS default, and what do you have to opt into in each language to get the other?
 
@@ -78,24 +78,24 @@ Build `var loans = new List<LoanRequest>();` (empty) and `var byId = new Diction
 
 ```csharp
 // 1. Throwing versions:
-loans.First();   // InvalidOperationException: Sequence contains no elements
-byId[42];        // KeyNotFoundException: The given key '42' was not present.
+transfers.First();   // InvalidOperationException: Sequence contains no elements
+byId[42];            // KeyNotFoundException: The given key '42' was not present.
 
 // 2. Soft versions:
-var first = loans.FirstOrDefault();
-if (first is null) Console.WriteLine("No loans yet");
+var first = transfers.FirstOrDefault();
+if (first is null) Console.WriteLine("No transfers yet");
 
 if (byId.TryGetValue(42, out var found))
-    Console.WriteLine(found.ApplicantName);
+    Console.WriteLine(found.To);
 else
-    Console.WriteLine("No loan #42");
+    Console.WriteLine("No transfer #42");
 ```
 
 **3.** TS defaults to soft (`.find()` → `undefined`, `map["k"]` → `undefined`) and you opt into throwing by hand (`?? throw`, assertion functions). C# offers both but the *plain-looking* spelling (`First()`, `dict[k]`) throws — you opt into softness explicitly (`...OrDefault`, `Try...`). Each language's default reveals its philosophy.
 
 ## Exercise 4.4 — Catch by type
 
-Write a method `ProcessPayload(string json)` that deserializes a `LoanRequest` and then validates `Amount > 0` (throw `ArgumentException` if not). Call it with three payloads — valid, malformed JSON, negative amount — and route each failure to a **different** catch block by exception type, no `if`/`instanceof` inside.
+Write a method `ProcessPayload(string json)` that deserializes a `TransferRequest` and then validates `Amount > 0` (throw `ArgumentException` if not). Call it with three payloads — valid, malformed JSON, negative amount — and route each failure to a **different** catch block by exception type, no `if`/`instanceof` inside.
 
 **Solution**
 
@@ -104,18 +104,18 @@ using System.Text.Json;
 
 void ProcessPayload(string json)
 {
-    var loan = JsonSerializer.Deserialize<LoanRequest>(json)
-               ?? throw new ArgumentException("Payload was null");
-    if (loan.Amount <= 0)
-        throw new ArgumentException($"Amount must be positive, got {loan.Amount}");
-    Console.WriteLine($"OK: {loan.ApplicantName} / {loan.Amount}");
+    var transfer = JsonSerializer.Deserialize<TransferRequest>(json)
+                   ?? throw new ArgumentException("Payload was null");
+    if (transfer.Amount <= 0)
+        throw new ArgumentException($"Amount must be positive, got {transfer.Amount}");
+    Console.WriteLine($"OK: {transfer.To} / {transfer.Amount}");
 }
 
 string[] payloads =
 [
-    """{"ApplicantName":"Alice","Amount":300000}""",
+    """{"To":"Bob","Amount":300}""",
     """{not json at all}""",
-    """{"ApplicantName":"Mallory","Amount":-5}""",
+    """{"To":"Bob","Amount":-5}""",       // Mallory tries a negative transfer to pull money
 ];
 
 foreach (var p in payloads)

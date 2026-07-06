@@ -48,7 +48,7 @@ dotnet nuget locals all --list   # where the package cache lives (no node_module
 #!/usr/bin/env dotnet
 #:package Humanizer@2.14.1
 using Humanizer;
-Console.WriteLine("LoanApplication".Humanize());
+Console.WriteLine("TransferRequest".Humanize());   // "Transfer request"
 ```
 
 ```bash

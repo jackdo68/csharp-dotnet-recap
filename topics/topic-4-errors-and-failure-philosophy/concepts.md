@@ -16,7 +16,7 @@ C# types are enforced *by the runtime*, so the lie gets caught **at the boundary
 
 | The situation | TS + Node at runtime | C#/.NET at runtime |
 |---|---|---|
-| API JSON doesn't match your type | `res.json() as LoanResponse` — the compiler trusts you; the wrong shape drifts inward until `Cannot read properties of undefined` somewhere deep. This gap is the entire reason Zod exists | `JsonException` thrown at the deserialization boundary, naming the property — the deserializer is a built-in Zod |
+| API JSON doesn't match your type | `res.json() as TransferResponse` — the compiler trusts you; the wrong shape drifts inward until `Cannot read properties of undefined` somewhere deep. This gap is the entire reason Zod exists | `JsonException` thrown at the deserialization boundary, naming the property — the deserializer is a built-in Zod |
 | An escape hatch was wrong (`as` / `any`) | Nothing — the types are gone at runtime; sentinel errors surface later, elsewhere | A wrong cast throws `InvalidCastException` at the cast itself |
 | `parseInt("abc")` | `NaN` — typed as `number`, compiles clean, silently poisons downstream math | `int.Parse` throws `FormatException` immediately (`int.TryParse` is the opt-in soft version) |
 | Missing dictionary key | `record["missing"]` is typed `T` and returns `undefined` (unless you run `noUncheckedIndexedAccess`, which most codebases don't) | `dict["missing"]` throws `KeyNotFoundException` right there (`TryGetValue` is the soft version) |
@@ -39,7 +39,7 @@ The exceptions you'll actually meet, so log lines read as words, not noise:
 ```csharp
 try
 {
-    var loan = JsonSerializer.Deserialize<LoanApplication>(json);
+    var transfer = JsonSerializer.Deserialize<TransferRequest>(json);
 }
 catch (JsonException ex)                          // catch by TYPE — no 'if (e instanceof ...)'
 {

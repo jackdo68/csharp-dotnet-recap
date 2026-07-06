@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A C#/.NET course site for an experienced **Node.js + TypeScript developer** (the repo owner). It deliberately does **not** cover all of C# — it covers the fundamental differences between C#/.NET and Node+TS, organized around "the five big differences" (see `topics/README.md`).
 
-- **Topics 1–4**: language/runtime fundamentals via small console programs (these still use loan-flavored examples — `LoanApplication`, `Money`).
-- **Topics 5–10**: one continuous build of a **Payment API** (`PaymentApp`) — register, login, transfer, balance; `User` + `Account` tables in Postgres **from day one** (Topic 5 builds the service once, directly against EF/Postgres — there is deliberately no throwaway in-memory phase; Topic 6 unpacks EF and adds tests); JWT auth with ownership checks; and in Topic 10 an external Node/Express **payment processor** (provided ready-made in the lesson — the reader never writes it) that becomes the single writer of money via atomic conditional SQL. Final compose: db + processor + api. Each topic's exercises start exactly where the previous topic ended.
+The whole course ties to **one** running example, the **PaymentApp** — this is not a broad C#/.NET crash course; it is an experienced Node/TS developer learning the *nuances* of C#/.NET, so every concept must land on a practical PaymentApp example (the concept, when to use it, and its real-world usage).
+
+- **Topics 1–4**: language/runtime fundamentals via small console programs, all in the **payment domain** (`Money`, `Account`, `User`, transfer) — every example foreshadows the exact types Topic 5's `PaymentApp` builds. No unrelated example domains.
+- **Topics 5–10**: one continuous build of a **Payment API** (`PaymentApp`) — register, login, transfer, balance; `User` + `Account` tables in Postgres **from day one** (Topic 5 builds the service once, directly against EF/Postgres — there is deliberately no throwaway in-memory phase; Topic 6 unpacks EF and adds tests); JWT auth with ownership checks; a CPU-bound `/v1/documents/upload` endpoint anchors Topic 7's threading; and in Topic 10 an external Node/Express **payment processor** (provided ready-made in the Concepts page — the reader never writes it) that becomes the single writer of money via atomic conditional SQL. Final compose: db + processor + api. Each topic's Hands On starts exactly where the previous topic ended.
 
 This is **docs only** — the repo contains no runnable application code, just the course markdown and the Astro site that renders it. It deploys to GitHub Pages via CI and is not run locally.
 
@@ -16,28 +18,28 @@ The published site: https://jackdo68.github.io/csharp-dotnet-recap/
 ## Architecture
 
 ```
-topics/       ← SOURCE OF TRUTH: course markdown (lesson.md + exercises.md per topic)
+topics/       ← SOURCE OF TRUTH: course markdown (concepts.md + hands-on.md per topic)
 topics/README.md  ← becomes the site's "Guide" page
 COMMANDS.md   ← becomes the site's "Commands" page (dotnet CLI cheat sheet)
 README.md     ← becomes the site's "Setup" page
 site/         ← Astro Starlight site that renders it all
 ```
 
-- `site/scripts/sync-content.mjs` copies the markdown into `site/src/content/docs/` at build time, deriving the page title from the first `#` heading and adding sidebar order/labels (`lesson` → 1, `exercises` → 2, labeled "Exercises & Solutions").
+- `site/scripts/sync-content.mjs` copies the markdown into `site/src/content/docs/` at build time, deriving the page title from the first `#` heading and adding sidebar order/labels (`concepts` → 1, labeled "Concepts"; `hands-on` → 2, labeled "Hands On").
 - **Never edit `site/src/content/docs/topic-*` or the generated `guide.md`/`commands.md`/`setup.md`** — they're gitignored build artifacts; edit the files in `topics/` and the repo root instead. The only hand-maintained page in the content dir is `index.mdx` (the landing page).
 - Deployment: push to `main` → `.github/workflows/deploy.yml` builds and deploys to GitHub Pages. The Astro config's `base` is `/csharp-dotnet-recap` — internal links in `index.mdx` must use `${import.meta.env.BASE_URL}`.
 
 ## Adding or renaming a topic
 
-A topic is a folder `topics/topic-N-<slug>/` containing exactly `lesson.md` and `exercises.md` (solutions live inline in exercises). The sync script picks up `topic-*` folders automatically, but **two files reference topics by hand** and must be updated in the same change:
+A topic is a folder `topics/topic-N-<slug>/` containing exactly `concepts.md` and `hands-on.md` (solutions live inline in Hands On). The sync script picks up `topic-*` folders automatically, but **two files reference topics by hand** and must be updated in the same change:
 
 1. `site/astro.config.mjs` — the sidebar group (`label` + `autogenerate.directory`)
 2. `site/src/content/docs/index.mdx` — the topic's `<LinkCard>`
 
 Also keep in sync when the 5–10 arc changes:
 
-- The **build-line banner** (blockquote at the top of each `exercises.md` for Topics 5–10: "**The PaymentApp build:** …") — one chain, bolded segment per page. Every page's banner must list all ten-arc segments with the current topic bolded.
-- Topic cross-references inside lessons ("Topic 3", "Topic 7") are plain text — grep for the topic number when renumbering.
+- The **build-line banner** (blockquote at the top of each `hands-on.md` for Topics 5–10: "**The PaymentApp build:** …") — one chain, bolded segment per page. Every page's banner must list all ten-arc segments with the current topic bolded.
+- Topic cross-references inside Concepts pages ("Topic 3", "Topic 7") are plain text — grep for the topic number when renumbering.
 
 ## Content conventions (the important part)
 
@@ -65,8 +67,8 @@ Every topic hangs off one of the five differences tabled in `topics/README.md` (
 
 The two pages have **different jobs**, and content must respect the split:
 
-- **`lesson.md` — where the real code lives.** The topic's new machinery (every new file of the app) is *built* here, explained line by line; the reader types it in as they read. Starts with `# Topic N: <name>`, then "The one question this topic answers" as a blockquote, then concepts (tables for comparisons, code with heavy comments), ends with **Interview talking points**.
-- **`exercises.md` — validation, never the primary build.** Drills that prove, break, and stress what the lesson built (produce the race, read the exact compiler error, watch the 401 become a 403); at most one small feature extension. If new core machinery is needed, it goes in the lesson, not an exercise. Titled `# Topic N: Exercises & Solutions`; Topics 5–10 open with the build-line banner blockquote. Numbered `Exercise N.M` sections: the task first, then a `**Solution**` block with full working code, expected output/errors, and the explanation + interview talking point it was secretly teaching.
+- **`concepts.md` — where the real code lives.** The topic's new machinery (every new file of the app) is *built* here, explained line by line; the reader types it in as they read. Starts with `# Topic N: <name>`, then "The one question this topic answers" as a blockquote, then concepts (tables for comparisons, code with heavy comments), ends with **Interview talking points**. Every concept must state *when to use it* and its *real-world usage* on the PaymentApp — no concept is introduced without a practical example.
+- **`hands-on.md` — doing it on the PaymentApp, never the primary build.** Drills that prove, break, and stress what Concepts built (produce the race, read the exact compiler error, watch the 401 become a 403); at most one small feature extension. If new core machinery is needed, it goes in Concepts, not Hands On. Titled `# Topic N: Hands On`; Topics 5–10 open with the build-line banner blockquote. Numbered `Exercise N.M` sections: the task first, then a `**Solution**` block with full working code, expected output/errors, and the explanation + interview talking point it was secretly teaching.
 
 Code style in examples: money is always `decimal`, async methods end in `Async`, private fields `_camelCase`, comparisons presented as both bullets and a table when substantial.
 

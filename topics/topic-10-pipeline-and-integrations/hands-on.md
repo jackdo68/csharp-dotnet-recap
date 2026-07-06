@@ -1,8 +1,8 @@
-# Topic 10: Exercises & Solutions
+# Topic 10: Hands On
 
 > **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → **Topic 10 (you are here): the pipeline & the payment processor.**
 
-Set up the lesson's pieces first: the `payment-processor/` folder (copy the lesson's three files — that service is provided, not an exercise), then the PaymentApp changes (DataAnnotations, exception middleware, typed client, `AccountLocks`, orchestrated transfer, auditor). For 10.1–10.6 run things locally against the composed Postgres (`docker compose up -d db`); the closer composes all three. Try each exercise before reading its solution.
+Set up Concepts' pieces first: the `payment-processor/` folder (copy Concepts' three files — that service is provided, not an exercise), then the PaymentApp changes (DataAnnotations, exception middleware, typed client, `AccountLocks`, orchestrated transfer, auditor). For 10.1–10.6 run things locally against the composed Postgres (`docker compose up -d db`); the closer composes all three. Try each exercise before reading its solution.
 
 ## Exercise 10.1 — Stand up the processor and talk to it directly
 
@@ -36,7 +36,7 @@ Also worth noticing: the "insufficient funds" 400 came from `rowCount === 0` on 
 
 ## Exercise 10.2 — Declarative validation (the zod layer)
 
-1. Add the lesson's DataAnnotations to `RegisterRequest` and `TransferRequest`, and delete the now-redundant `amount <= 0` throw from the service. Where did that rule *go*?
+1. Add Concepts' DataAnnotations to `RegisterRequest` and `TransferRequest`, and delete the now-redundant `amount <= 0` throw from the service. Where did that rule *go*?
 2. Fire bad payloads at register and transfer: 1-character name, `not-an-email`, 6-character password, amount `0`, amount `-5`. Read one response body carefully — what structure do the errors come back in?
 3. The three-layer drill: for each of these transfer payloads, name **which layer** rejects it — deserialization (Topic 4), DataAnnotations (this exercise), or business rules (service/processor):
    `{"amount":"heaps"}` · `{"amount":0}` · `{"amount":50}` with a broke payer · `{"amount":50}` payer == payee.
@@ -74,7 +74,7 @@ The senior version of this answer: "validation lives at the layer that has the i
 
 ## Exercise 10.3 — Your own middleware
 
-1. Add the lesson's inline timing middleware and the `ExceptionMappingMiddleware`. Register the exception mapper **first** in the pipeline, then timing, then auth. Why does the mapper have to be first?
+1. Add Concepts' inline timing middleware and the `ExceptionMappingMiddleware`. Register the exception mapper **first** in the pipeline, then timing, then auth. Why does the mapper have to be first?
 2. Delete the try/catch from `PaymentsController.Transfer` and `AccountsController.Deposit`. Re-run the failure curls from Topic 5's exercise 5.1 — confirm the statuses are identical to before.
 3. Watch the timing middleware's output — including for a request that *failed*. What does the logged status tell you about middleware ordering?
 
@@ -96,7 +96,7 @@ The exception→status table now exists **once**, in one file, instead of copy-p
 
 ## Exercise 10.4 — The typed client and the concurrent saga
 
-1. Wire the lesson's `PaymentProcessorClient` (registration + config key), replace `TransferAsync`'s EF mutations with the lock + `Task.WhenAll` + compensation orchestration, and delete the old static `SemaphoreSlim`. With the processor running, do a normal transfer end to end and confirm balances via `/v1/accounts/balance`.
+1. Wire Concepts' `PaymentProcessorClient` (registration + config key), replace `TransferAsync`'s EF mutations with the lock + `Task.WhenAll` + compensation orchestration, and delete the old static `SemaphoreSlim`. With the processor running, do a normal transfer end to end and confirm balances via `/v1/accounts/balance`.
 2. Now break the downstream: **stop the processor** (Ctrl+C) and fire a transfer. What status does the caller get, and which piece of today's code chose it?
 3. Force a one-leg failure: transfer to a payee that doesn't exist. Trace what happened to the payer's money — step by step, from your app's log lines and the balances.
 
@@ -164,13 +164,13 @@ One comparison. That's the entire distance between "passed code review" and "pag
 
 ## Exercise 10.6 — The auditor in the background
 
-1. Add the lesson's `SettlementAuditor` and register it. Before running: predict what happens if you inject `PaymentDbContext` directly into its constructor instead of `IServiceScopeFactory`. Then try it — read the actual error.
+1. Add Concepts' `SettlementAuditor` and register it. Before running: predict what happens if you inject `PaymentDbContext` directly into its constructor instead of `IServiceScopeFactory`. Then try it — read the actual error.
 2. Run the 10.5 attack while watching the auditor's log line across a few ticks. What should it print every time, and what would a drift mean?
 3. `docker compose stop api` (or Ctrl+C locally) — what does the auditor do during shutdown, and which Topic 8 machinery is reaching into your loop?
 
 **Solution**
 
-1. The app **fails at startup** with `InvalidOperationException: Cannot consume scoped service 'PaymentDbContext' from singleton 'IHostedService'`. The DI container validates the lifetime graph before serving a single request — a *singleton* holding a *scoped* service would secretly extend that DbContext's life to the whole app (the exact captive-dependency crash you read in exercise 5.2, now wearing a hosted-service disguise). The fix is the pattern in the lesson: inject `IServiceScopeFactory`, create a fresh scope per tick, resolve the DbContext inside it. This startup error is one of the most-Googled in ASP.NET Core; you've now read it on purpose.
+1. The app **fails at startup** with `InvalidOperationException: Cannot consume scoped service 'PaymentDbContext' from singleton 'IHostedService'`. The DI container validates the lifetime graph before serving a single request — a *singleton* holding a *scoped* service would secretly extend that DbContext's life to the whole app (the exact captive-dependency crash you read in exercise 5.2, now wearing a hosted-service disguise). The fix is the pattern in Concepts: inject `IServiceScopeFactory`, create a fresh scope per tick, resolve the DbContext inside it. This startup error is one of the most-Googled in ASP.NET Core; you've now read it on purpose.
 
 2. `AUDIT: total money in system = 2000.0` — the same number, tick after tick, *while* 50 concurrent transfers hammer the API. That's the reconciliation invariant: transfers move money, they never create or destroy it. A drift means a one-legged transfer escaped compensation — which is why real payment companies run exactly this job (against yesterday's ledger, at much larger scale) and page someone when it's nonzero.
 

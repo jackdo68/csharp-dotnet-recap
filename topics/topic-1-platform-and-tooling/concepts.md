@@ -23,19 +23,19 @@ One nuance: .NET is multi-language — the CLR runs anything that compiles to it
 Scaffold a project and look inside:
 
 ```bash
-dotnet new console -n LoanBasics
-cd LoanBasics
+dotnet new console -n PaymentBasics
+cd PaymentBasics
 dotnet run          # prints Hello, World!
 ```
 
 What's in the folder (vs a Node project):
 
-- **`LoanBasics.csproj`** — your `package.json`, but XML: dependencies, target framework, build settings.
+- **`PaymentBasics.csproj`** — your `package.json`, but XML: dependencies, target framework, build settings.
 - **`Program.cs`** — source code. Modern C# allows top-level statements: script-style code with no boilerplate `Main` method.
 - **`bin/` and `obj/`** — build output, like `dist/`. Git-ignore them.
 - **No `node_modules`** — NuGet packages live in a per-user global cache (`~/.nuget/packages`), referenced by the project, never copied in.
 
-Here's the big mental shift: **you never import your own files.** Every `.cs` file in the project compiles together automatically. `using Xyz;` at the top of a file imports a *namespace* (a named group of types), never a file path. There is no `import { LoanService } from './services/loan'` equivalent — organization is by namespace (Topic 2 covers the conventions), and the compiler finds the files itself. No relative-path import spaghetti, no barrel files, no path aliases.
+Here's the big mental shift: **you never import your own files.** Every `.cs` file in the project compiles together automatically. `using Xyz;` at the top of a file imports a *namespace* (a named group of types), never a file path. There is no `import { PaymentService } from './services/payment'` equivalent — organization is by namespace (Topic 2 covers the conventions), and the compiler finds the files itself. No relative-path import spaghetti, no barrel files, no path aliases.
 
 ## The dotnet CLI is node + npm in one binary
 
@@ -99,7 +99,7 @@ Console.WriteLine("I'm a C# script");
 ```csharp
 #:package Humanizer@2.14.1
 using Humanizer;
-Console.WriteLine("LoanApplication".Humanize());
+Console.WriteLine("TransferRequest".Humanize());   // "Transfer request"
 ```
 
 If a script grows up, `dotnet project convert hello.cs` turns it into a normal project.

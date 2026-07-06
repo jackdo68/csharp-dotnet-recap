@@ -1,8 +1,8 @@
-# Topic 9: Exercises & Solutions
+# Topic 9: Hands On
 
 > **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → Topic 7 the transfer race → Topic 8 Docker & ship → **Topic 9 (you are here): register, login, lock down** → Topic 10 the pipeline & the payment processor.
 
-Build the lesson's changes first (JWT package, `Jwt` config, `ValidateCredentialsAsync`, login endpoint, `AddJwtBearer`, `[Authorize]` + ownership check). Run locally against the composed Postgres (`docker compose up -d db`) for 9.1–9.3; 9.4 composes everything. Try each exercise before reading its solution.
+Build Concepts' changes first (JWT package, `Jwt` config, `ValidateCredentialsAsync`, login endpoint, `AddJwtBearer`, `[Authorize]` + ownership check). Run locally against the composed Postgres (`docker compose up -d db`) for 9.1–9.3; 9.4 composes everything. Try each exercise before reading its solution.
 
 ## Exercise 9.1 — Log in and read your own token
 

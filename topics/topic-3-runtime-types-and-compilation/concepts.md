@@ -22,15 +22,16 @@ C#:          .cs ──Roslyn (types KEPT)──▶ IL bytecode in a .dll ──
 **1. Reflection — running code can inspect types.**
 
 ```csharp
-var t = typeof(LoanApplication);
+var t = typeof(Transfer);
 foreach (var p in t.GetProperties())
     Console.WriteLine($"{p.Name}: {p.PropertyType.Name}");
-// ApplicantName: String
+// From: String
+// To: String
 // Amount: Decimal
 // Status: String
 ```
 
-Try that in TS: `Object.keys(new LoanApplication())` gives you keys only if the instance has assigned values, and *never* gives you the declared types — they're gone. This isn't a party trick; it's the mechanism the whole platform runs on:
+Try that in TS: `Object.keys(new Transfer())` gives you keys only if the instance has assigned values, and *never* gives you the declared types — they're gone. This isn't a party trick; it's the mechanism the whole platform runs on:
 
 - **EF Core** (Topic 6) reads your model classes at runtime to build tables and SQL — no schema file, no codegen step.
 - **The DI container** (Topic 5) reads constructor signatures at runtime to decide what to inject — no `emitDecoratorMetadata` tricks like NestJS needs.
@@ -40,20 +41,20 @@ Try that in TS: `Object.keys(new LoanApplication())` gives you keys only if the 
 
 ```csharp
 void Describe<T>() => Console.WriteLine($"T is {typeof(T).Name}");
-Describe<LoanApplication>();   // "T is LoanApplication"
+Describe<Transfer>();   // "T is Transfer"
 ```
 
-In TS, `typeof T` inside a generic function is meaningless — the type parameter never reaches the runtime. In C#, `Set<LoanApplication>()` in EF Core uses its type argument at runtime to find the right table.
+In TS, `typeof T` inside a generic function is meaningless — the type parameter never reaches the runtime. In C#, `Set<Account>()` in EF Core (Topic 6, against the real `Account` table) uses its type argument at runtime to find the right table.
 
 **3. Runtime type checks that are actually checks.**
 
 ```csharp
 object thing = GetSomething();
-if (thing is LoanApplication loan)      // real runtime test + narrowing in one
-    Console.WriteLine(loan.Amount);
+if (thing is Transfer transfer)      // real runtime test + narrowing in one
+    Console.WriteLine(transfer.Amount);
 ```
 
-`is` performs a genuine runtime type test (TS's `instanceof` works only for classes; `is`-style predicates for shapes are hand-written and unverified). The pattern `thing is LoanApplication loan` tests *and* declares a narrowed variable — TS narrowing, but backed by the runtime.
+`is` performs a genuine runtime type test (TS's `instanceof` works only for classes; `is`-style predicates for shapes are hand-written and unverified). The pattern `thing is Transfer transfer` tests *and* declares a narrowed variable — TS narrowing, but backed by the runtime.
 
 ## What's in the .dll
 

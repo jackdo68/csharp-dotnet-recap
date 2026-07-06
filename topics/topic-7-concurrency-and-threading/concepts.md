@@ -8,7 +8,7 @@ This is the biggest genuine difference from Node, so it's worth doing by hand. N
 
 And it's not academic — this topic touches `PaymentApp` in two places, one per half of the rule below:
 
-- A new **`/v1/documents/upload`** endpoint (verify a customer's KYC document): reading the file is I/O, but hashing and scanning it is **CPU-bound** — the poster child for real threads.
+- A new **`/v1/document/upload`** endpoint (verify a customer's KYC document): reading the file and storing it is I/O, but hashing and scanning it is **CPU-bound** — the poster child for real threads.
 - Your existing **`TransferAsync`** is a **read-check-modify on shared money**. Under one thread (Node) that's safe between awaits; under a thread pool it's a bug you already shipped. This topic makes you produce it, watch money vanish, and fix it.
 
 **The one rule that matters (and the classic interview trap):**
@@ -18,67 +18,47 @@ And it's not academic — this topic touches `PaymentApp` in two places, one per
 
 Using `Task.Run` for I/O wastes a thread; using `await` alone for heavy CPU work still occupies that one thread. Knowing which is which is the whole game.
 
-## CPU-bound work in the app: `/v1/documents/upload`
+## CPU-bound work in the app: `/v1/document/upload`
 
-A payment app verifies people — KYC documents, receipts, invoices. The upload is I/O; the *processing* (hash for integrity, scan for malware, later OCR) is CPU-bound. This is where real threads finally earn their keep, and where a Node reflex needs correcting.
+A payment app verifies people — a user uploads a KYC document (a `.txt` for us). Reading the upload and writing it to disk is **I/O**; *scanning* its contents (hash for integrity, keyword/malware scan, later OCR) is **CPU-bound**. This is where real threads finally earn their keep, and where a Node reflex needs correcting. The full `DocumentService` + `DocumentController` are in Hands On; here's the essential shape.
 
-`Services/DocumentScanner.cs` — the CPU work, isolated so it's easy to reason about:
+`DocumentService.Scan` is the pure-CPU core — no awaits, it burns a core:
 
 ```csharp
-using System.Security.Cryptography;
+public record ScanResult(string FileName, int Words, string Sha256, bool Flagged);
 
-namespace PaymentApp.Services;
-
-public record ScanResult(string FileName, long Bytes, string Sha256, bool Flagged);
-
-public class DocumentScanner
+// CPU-BOUND: hash + scan the text.
+public ScanResult Scan(string fileName, byte[] content)
 {
-    // CPU-BOUND: hashing + a simulated content scan. No awaits — this burns a core.
-    public ScanResult Scan(string fileName, byte[] content)
-    {
-        var hash = Convert.ToHexString(SHA256.HashData(content));
+    var hash = Convert.ToHexString(SHA256.HashData(content));
+    var text = Encoding.UTF8.GetString(content);
 
-        // Pretend this is malware scanning / OCR — real CPU cost, ~50ms.
-        double signal = 0;
-        for (int i = 0; i < 5_000_000; i++) signal += Math.Sqrt(i);
+    double signal = 0;                                   // pretend malware/OCR scan — real CPU cost
+    for (int i = 0; i < 5_000_000; i++) signal += Math.Sqrt(i);
 
-        var flagged = content.Length == 0 || hash.StartsWith("00");  // a pretend rule
-        return new ScanResult(fileName, content.Length, hash, flagged);
-    }
+    var words = text.Split(default(char[]?), StringSplitOptions.RemoveEmptyEntries).Length;
+    var flagged = text.Contains("fraud", StringComparison.OrdinalIgnoreCase);
+    return new ScanResult(fileName, words, hash, flagged);
 }
 ```
 
-`Controllers/DocumentsController.cs`:
+The endpoint wraps that CPU core in I/O — read the upload, **scan** it, then **store the `.txt` on disk and save its name on the user**:
 
 ```csharp
-using Microsoft.AspNetCore.Mvc;
-using PaymentApp.Services;
-
-namespace PaymentApp.Controllers;
-
-[ApiController]
-[Route("v1/documents")]
-public class DocumentsController : ControllerBase
+[HttpPost("upload")]                              // POST /v1/document/upload  (multipart/form-data)
+public async Task<ActionResult<ScanResult>> Upload(int userId, IFormFile file)
 {
-    private readonly DocumentScanner _scanner;
-    public DocumentsController(DocumentScanner scanner) => _scanner = scanner;
+    using var ms = new MemoryStream();
+    await file.CopyToAsync(ms);                   // I/O: pull bytes off the wire (await — no thread burned)
+    var bytes = ms.ToArray();
 
-    [HttpPost("upload")]                              // POST /v1/documents/upload  (multipart/form-data)
-    public async Task<ActionResult<ScanResult>> Upload(IFormFile file)
-    {
-        // I/O-BOUND: pull the bytes off the wire. await — no thread burned, exactly like Node.
-        using var ms = new MemoryStream();
-        await file.CopyToAsync(ms);
-        var bytes = ms.ToArray();
-
-        // CPU-BOUND: hand the scan to a pool thread so the request thread isn't the one grinding.
-        var result = await Task.Run(() => _scanner.Scan(file.FileName, bytes));
-        return Ok(result);
-    }
+    var result = await Task.Run(() => _documents.Scan(file.FileName, bytes));   // CPU: on a pool thread
+    await _documents.StoreAsync(userId, bytes);   // I/O: write to disk + set User.File + SaveChanges
+    return Ok(result);
 }
 ```
 
-Register the scanner in `Program.cs` (same DI you learned in Topic 5): `builder.Services.AddSingleton<DocumentScanner>();` — it holds no per-request state, so a singleton is fine.
+`DocumentService` is registered **scoped** (`AddScoped<DocumentService>()`) because it holds the scoped `DbContext` (Topic 5's lifetime rule). (Topic 9 makes this endpoint private and takes `userId` from the token instead of the query.)
 
 **The Node reflex to unlearn.** In Node, CPU work in a handler blocks *the* event-loop thread, stalling every other request — so you offload to a `worker_thread` or a separate service. The instinct is "get CPU work off the loop." **There is no single loop here to block.** Every request already runs on its own thread-pool thread; one CPU-heavy request occupies one pool thread while others keep serving on the rest. So the honest nuance about that `Task.Run`:
 
@@ -102,7 +82,7 @@ public async Task<ActionResult<ScanResult[]>> UploadBatch(List<IFormFile> files)
     // Scan them (CPU) across every core at once — no Node equivalent without worker pools.
     var results = new ScanResult[contents.Length];
     Parallel.For(0, contents.Length, i =>
-        results[i] = _scanner.Scan(contents[i].FileName, contents[i].Bytes));
+        results[i] = _documents.Scan(contents[i].FileName, contents[i].Bytes));
 
     return Ok(results);
 }
@@ -118,7 +98,7 @@ Parallelism has a price: the moment two threads touch the *same* variable, you h
 int flagged = 0;
 Parallel.For(0, contents.Length, i =>
 {
-    if (_scanner.Scan(contents[i].FileName, contents[i].Bytes).Flagged)
+    if (_documents.Scan(contents[i].FileName, contents[i].Bytes).Flagged)
         flagged++;                 // ❌ UNSAFE across threads — loses increments
 });
 ```
@@ -137,11 +117,11 @@ lock (gate) { flagged++; }         // one thread inside the braces at a time
 Now the same bug, on the thing that matters — **money**. Your `TransferAsync` from Topics 5–6:
 
 ```csharp
-var payer = await _db.Accounts.FirstOrDefaultAsync(a => a.UserId == payerUserId);  // READ  balance = 800
+var payer = await _db.Users.FirstOrDefaultAsync(u => u.Id == payerUserId);  // READ  balance = 800
 // ... an overlapping request reads 800 here too ...
-if (payer.Balance < amount) ...                                                     // CHECK stale 800
-payer.Balance -= amount;                                                            // MODIFY: both compute 790
-await _db.SaveChangesAsync();                                                       // WRITE: both write 790 — one debit lost
+if (payer.Balance < amount) ...                                              // CHECK stale 800
+payer.Balance -= amount;                                                     // MODIFY: both compute 790
+await _db.SaveChangesAsync();                                                // WRITE: both write 790 — one debit lost
 ```
 
 `payer.Balance -= amount` is the exact `flagged++` read-modify-write, wearing your production code. Fifty overlapping transfers and money is created or destroyed. Two extra problems over the counter, though:
@@ -163,11 +143,11 @@ The consequence C# makes visible: callers only see the return type (`Task<string
 
 ```csharp
 // With async: compiler builds a state machine just to unwrap and re-wrap the task
-public async Task<ScanResult> ScanAsync(byte[] b) => await Task.Run(() => _scanner.Scan("x", b));
+public async Task<ScanResult> ScanAsync(byte[] b) => await Task.Run(() => _documents.Scan("x", b));
 
 // Without async ("elided"): same contract to callers, no state machine allocated —
 // you hand back the inner Task itself and step out of the chain
-public Task<ScanResult> ScanAsync(byte[] b) => Task.Run(() => _scanner.Scan("x", b));
+public Task<ScanResult> ScanAsync(byte[] b) => Task.Run(() => _documents.Scan("x", b));
 ```
 
 JS has the identical move (`return fetch(url)` vs `return await fetch(url)`), but in C# the difference is more than style — the state machine is a real allocation and real indirection, so pass-through elision is a genuine (micro-)optimization.
@@ -216,7 +196,7 @@ The cheat sheet:
 ```csharp
 lock (gate)
 {
-    var payer = await _db.Accounts.FirstOrDefaultAsync(...);   // ❌ CS1996
+    var payer = await _db.Users.FirstOrDefaultAsync(...);   // ❌ CS1996
 }
 // error CS1996: Cannot await in the body of a lock statement
 ```
@@ -240,7 +220,7 @@ public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount
 }
 ```
 
-Hands On 7.5 applies exactly this to `PaymentApp`. One honest caveat to carry with it: a `SemaphoreSlim` serializes transfers **within one process**. Run two replicas of the API (Topic 8's world) and each has its own gate — the race returns *between* processes. The production-grade answer lives where the shared state lives: the **database** — a transaction with row locking (`SELECT ... FOR UPDATE`, which your Postgres experience already knows) or optimistic concurrency tokens. The in-process gate is still worth having and still worth teaching: it's the same reasoning, one level up from `lock`. (Topic 10 replaces it with per-account ordered locks plus the processor's atomic `UPDATE`.)
+Hands On 7.5 applies exactly this to `PaymentApp`. One honest caveat to carry with it: a `SemaphoreSlim` serializes transfers **within one process**. Run two replicas of the API (Topic 8's world) and each has its own gate — the race returns *between* processes. The production-grade answer lives where the shared state lives: the **database** — a transaction with row locking (`SELECT ... FOR UPDATE`, which your Postgres experience already knows) or optimistic concurrency tokens. The in-process gate is still worth having and still worth teaching: it's the same reasoning, one level up from `lock`. (Topic 10 replaces it with per-user ordered locks plus the processor's atomic `UPDATE`.)
 
 ## What each tool is for
 

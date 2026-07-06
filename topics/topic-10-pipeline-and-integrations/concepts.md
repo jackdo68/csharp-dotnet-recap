@@ -60,8 +60,9 @@ const pool = new pg.Pool({
 const app = express();
 app.use(express.json());
 
-// Note the quoted "Accounts"/"Balance"/"UserId": EF Core created case-sensitive
+// Note the quoted "Users"/"Balance"/"Id": EF Core created case-sensitive
 // PascalCase identifiers (Topic 6), and unquoted names in Postgres fold to lowercase.
+// Balance lives on the Users table now — the processor writes it directly.
 
 // Shared input check. In a real service you'd reach for zod — same idea as
 // the DataAnnotations you're about to add on the .NET side.
@@ -81,17 +82,17 @@ app.post("/v1/withdraw", async (req, res) => {
   // no app-level lock, and it stays correct with any number of replicas.
   // This is the production-grade fix Topic 7 promised.
   const result = await pool.query(
-    `UPDATE "Accounts" SET "Balance" = "Balance" - $1
-     WHERE "UserId" = $2 AND "Balance" >= $1
+    `UPDATE "Users" SET "Balance" = "Balance" - $1
+     WHERE "Id" = $2 AND "Balance" >= $1
      RETURNING "Balance"`,
     [amount, userId]
   );
   if (result.rowCount === 1) return res.json({ balance: result.rows[0].Balance });
 
-  // 0 rows: either the account doesn't exist, or the balance guard failed.
-  const exists = await pool.query(`SELECT 1 FROM "Accounts" WHERE "UserId" = $1`, [userId]);
+  // 0 rows: either the user doesn't exist, or the balance guard failed.
+  const exists = await pool.query(`SELECT 1 FROM "Users" WHERE "Id" = $1`, [userId]);
   if (exists.rowCount === 0)
-    return res.status(404).json({ error: `No account for user ${userId}` });
+    return res.status(404).json({ error: `No user ${userId}` });
   return res.status(400).json({ error: "Insufficient funds" });
 });
 
@@ -101,13 +102,13 @@ app.post("/v1/deposit", async (req, res) => {
   const { userId, amount } = req.body;
 
   const result = await pool.query(
-    `UPDATE "Accounts" SET "Balance" = "Balance" + $1
-     WHERE "UserId" = $2
+    `UPDATE "Users" SET "Balance" = "Balance" + $1
+     WHERE "Id" = $2
      RETURNING "Balance"`,
     [amount, userId]
   );
   if (result.rowCount === 0)
-    return res.status(404).json({ error: `No account for user ${userId}` });
+    return res.status(404).json({ error: `No user ${userId}` });
   return res.json({ balance: result.rows[0].Balance });
 });
 
@@ -227,24 +228,24 @@ app.UseMiddleware<ExceptionMappingMiddleware>();
 // then timing, then UseAuthentication, UseAuthorization, MapControllers
 ```
 
-Now delete the try/catch from `PaymentsController` and `AccountsController` — actions shrink to their happy path, and the exception→status mapping is stated **once** for the whole app. Topic 4's catch-by-type, promoted from per-endpoint to infrastructure. (The framework also ships `UseExceptionHandler`/`IExceptionHandler` for this job with RFC-7807 output; writing it by hand once is how you understand what they do.)
+Now delete the try/catch from `PaymentController` and `DocumentController` — actions shrink to their happy path, and the exception→status mapping is stated **once** for the whole app. Topic 4's catch-by-type, promoted from per-endpoint to infrastructure. (The framework also ships `UseExceptionHandler`/`IExceptionHandler` for this job with RFC-7807 output; writing it by hand once is how you understand what they do.)
 
 ## Gap 3 — outbound HTTP: `IHttpClientFactory` + a typed client (≈ axios)
 
 Never `new HttpClient()` per request (socket exhaustion — the .NET equivalent of not reusing keep-alive agents in Node). The factory pattern, with a **typed client** so consumers get a real API instead of raw HTTP:
 
-`Services/PaymentProcessorClient.cs`:
+`Services/PaymentClient.cs`:
 
 ```csharp
 using System.Net;
 
 namespace PaymentApp.Services;
 
-public class PaymentProcessorClient
+public class PaymentClient
 {
     private readonly HttpClient _http;     // injected pre-configured by the factory
 
-    public PaymentProcessorClient(HttpClient http) => _http = http;
+    public PaymentClient(HttpClient http) => _http = http;
 
     public Task WithdrawAsync(int userId, decimal amount) => PostAsync("v1/withdraw", userId, amount);
     public Task DepositAsync(int userId, decimal amount)  => PostAsync("v1/deposit", userId, amount);
@@ -259,7 +260,7 @@ public class PaymentProcessorClient
         var body = await response.Content.ReadFromJsonAsync<ProcessorError>();
         throw response.StatusCode switch
         {
-            HttpStatusCode.NotFound   => new KeyNotFoundException(body?.Error ?? "Account not found."),
+            HttpStatusCode.NotFound   => new KeyNotFoundException(body?.Error ?? "User not found."),
             HttpStatusCode.BadRequest => new InvalidOperationException(body?.Error ?? "Rejected by processor."),
             _ => new HttpRequestException($"Processor returned {(int)response.StatusCode}"),
         };
@@ -272,33 +273,33 @@ public class PaymentProcessorClient
 Registration in `Program.cs` — note this *is* DI, the client is just another constructor-injected dependency:
 
 ```csharp
-builder.Services.AddHttpClient<PaymentProcessorClient>(client =>
+builder.Services.AddHttpClient<PaymentClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["PaymentProcessor:BaseUrl"]!));
 ```
 
 `appsettings.json` gains `"PaymentProcessor": { "BaseUrl": "http://localhost:4000" }` — overridden to `http://processor:4000` in compose, exactly like the connection string (Topic 8's machinery, third rep).
 
-### The transfer, re-orchestrated — both legs in flight, locked accounts, compensation
+### The transfer, re-orchestrated — both legs in flight, locked users, compensation
 
-`PaymentService.TransferAsync` becomes an orchestrator with three jobs: **lock** both accounts, fire **both legs concurrently**, and **compensate** if only one leg lands. Topic 7's single static `SemaphoreSlim` (one gate for *all* transfers) gets replaced by something smarter: one gate **per account**.
+`PaymentService.TransferAsync` becomes an orchestrator with three jobs: **lock** both users, fire **both legs concurrently**, and **compensate** if only one leg lands. Topic 7's single static `SemaphoreSlim` (one gate for *all* transfers) gets replaced by something smarter: one gate **per user**.
 
-**First, the per-account locks** — `Services/AccountLocks.cs`, registered as a **singleton** (gates must be shared app-wide; a scoped instance would hand every request its own gates, guarding nothing — Topic 5's lifetime lesson, third rep):
+**First, the per-user locks** — `Services/UserLocks.cs`, registered as a **singleton** (gates must be shared app-wide; a scoped instance would hand every request its own gates, guarding nothing — Topic 5's lifetime lesson, third rep):
 
 ```csharp
 using System.Collections.Concurrent;
 
 namespace PaymentApp.Services;
 
-public class AccountLocks
+public class UserLocks
 {
-    // One SemaphoreSlim per account id, created on first use.
+    // One SemaphoreSlim per user id, created on first use.
     // ConcurrentDictionary because many threads race to create gates (Topic 7!).
     private readonly ConcurrentDictionary<int, SemaphoreSlim> _gates = new();
 
     private SemaphoreSlim GateFor(int userId)
         => _gates.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
 
-    // Lock BOTH accounts — ALWAYS acquiring in ascending id order. See below: this
+    // Lock BOTH users — ALWAYS acquiring in ascending id order. See below: this
     // single line is the difference between "works" and "deadlocks under load".
     public async Task<IDisposable> LockPairAsync(int userIdA, int userIdB)
     {
@@ -364,13 +365,13 @@ public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount
 }
 ```
 
-(`PaymentService` now takes `PaymentProcessorClient`, `AccountLocks`, and `ILogger<PaymentService>` — plus the `DbContext` it keeps for balance reads. Constructor injection scales; that's the point of it.)
+(`PaymentService` now takes `PaymentClient`, `UserLocks`, and `ILogger<PaymentService>` — plus the `DbContext` it keeps for balance reads. Constructor injection scales; that's the point of it.)
 
 Three honest observations, in ascending order of seniority:
 
 1. **Concurrent legs change the failure geometry.** Sequential withdraw-then-deposit could only strand money in one direction; with both in flight, *either* leg can be the survivor, so compensation must handle both — that's why the catch inspects `IsCompletedSuccessfully` on each task.
 2. **This is "atomic" with an asterisk.** Locks + compensation make the pair *appear* all-or-nothing in every failure you can catch — but if the process dies between the legs, no catch block runs. True atomicity across two HTTP calls does not exist (this is the two-generals problem); real processors approximate it with **authorize/capture** (place a hold, then settle) and idempotency keys. The catch block is a **saga** in miniature: load-bearing *and* insufficient, and knowing both halves is the interview answer.
-3. **The locks are per-process; the SQL is the backstop.** Two API replicas each have their own `AccountLocks` — across replicas, correctness rests on the processor's atomic `UPDATE`, which is exactly where it should rest. The locks' real job is serializing *sagas* on the same accounts within an instance, so a compensation deposit can't interleave with another transfer's withdraw. Defense in depth, each layer honest about what it guards.
+3. **The locks are per-process; the SQL is the backstop.** Two API replicas each have their own `UserLocks` — across replicas, correctness rests on the processor's atomic `UPDATE`, which is exactly where it should rest. The locks' real job is serializing *sagas* on the same users within an instance, so a compensation deposit can't interleave with another transfer's withdraw. Defense in depth, each layer honest about what it guards.
 
 ## Gap 4 — background work: a `BackgroundService` auditor
 
@@ -405,7 +406,7 @@ public class SettlementAuditor : BackgroundService     // ≈ a node-cron worker
             using (var scope = _scopes.CreateScope())
             {
                 var db = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();
-                var total = await db.Accounts.SumAsync(a => a.Balance, stoppingToken);
+                var total = await db.Users.SumAsync(u => u.Balance, stoppingToken);
                 _logger.LogInformation("AUDIT: total money in system = {Total}", total);
             }
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);   // respects shutdown
@@ -464,5 +465,5 @@ Same service-name-as-hostname rule as Topic 8 (`Host=db`, `http://processor:4000
 - Validation has three layers, and you can name which rejected a request: **deserialization** (shape, Topic 4), **DataAnnotations** (per-field rules, automatic 400), **business rules** (state-dependent, exceptions from the service).
 - "`IHttpClientFactory` typed clients: never `new HttpClient()` per request — socket exhaustion — and the client translates downstream HTTP into our domain exceptions."
 - The money sentence: "each leg is an atomic conditional `UPDATE` in the database — that survives replicas; but splitting withdraw/deposit across services reopens atomicity as a saga: concurrent legs via `Task.WhenAll`, compensation for whichever leg survived, and a critical alert when compensation itself fails." One breath, five years of scars.
-- Deadlock and lock ordering: "per-account gates acquired in ascending id order — a global acquisition order is the classic fix for circular wait." Producing the A→B/B→A deadlock on purpose (exercise 10.5) gives you a war story most candidates only know from textbooks.
+- Deadlock and lock ordering: "per-user gates acquired in ascending id order — a global acquisition order is the classic fix for circular wait." Producing the A→B/B→A deadlock on purpose (exercise 10.5) gives you a war story most candidates only know from textbooks.
 - `BackgroundService` + `IServiceScopeFactory`: singleton hosts can't inject scoped services — make a scope per tick. Everyone hits this once; you've now hit it on purpose.

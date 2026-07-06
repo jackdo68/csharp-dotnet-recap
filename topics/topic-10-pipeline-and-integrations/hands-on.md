@@ -2,7 +2,7 @@
 
 > **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → Topic 7 the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → **Topic 10 (you are here): the pipeline & the payment processor.**
 
-Set up Concepts' pieces first: the `payment-processor/` folder (copy Concepts' three files — that service is provided, not an exercise), then the PaymentApp changes (DataAnnotations, exception middleware, typed client, `AccountLocks`, orchestrated transfer, auditor). For 10.1–10.6 run things locally against the composed Postgres (`docker compose up -d db`); the closer composes all three. Try each exercise before reading its solution.
+Set up Concepts' pieces first: the `payment-processor/` folder (copy Concepts' three files — that service is provided, not an exercise), then the PaymentApp changes (DataAnnotations, exception middleware, typed client, `UserLocks`, orchestrated transfer, auditor). For 10.1–10.6 run things locally against the composed Postgres (`docker compose up -d db`); the closer composes all three. Try each exercise before reading its solution.
 
 ## Exercise 10.1 — Stand up the processor and talk to it directly
 
@@ -23,7 +23,7 @@ curl -i -X POST http://localhost:4000/v1/withdraw \
 
 curl -i -X POST http://localhost:4000/v1/withdraw \
   -H "Content-Type: application/json" -d '{"userId":999,"amount":10}'
-# 404 {"error":"No account for user 999"}
+# 404 {"error":"No user 999"}
 
 curl -X POST http://localhost:4000/v1/deposit \
   -H "Content-Type: application/json" -d '{"userId":1,"amount":100}'
@@ -48,7 +48,7 @@ Also worth noticing: the "insufficient funds" 400 came from `rowCount === 0` on 
 2.
 
 ```bash
-curl -i -X POST http://localhost:PORT/v1/register \
+curl -i -X POST http://localhost:PORT/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"name":"A","email":"not-an-email","password":"short"}'
 # 400 — problem-details body:
@@ -75,7 +75,7 @@ The senior version of this answer: "validation lives at the layer that has the i
 ## Exercise 10.3 — Your own middleware
 
 1. Add Concepts' inline timing middleware and the `ExceptionMappingMiddleware`. Register the exception mapper **first** in the pipeline, then timing, then auth. Why does the mapper have to be first?
-2. Delete the try/catch from `PaymentsController.Transfer` and `AccountsController.Deposit`. Re-run the failure curls from Topic 5's exercise 5.1 — confirm the statuses are identical to before.
+2. Delete the try/catch from `PaymentController.Transfer` and `DocumentController.Upload`. Re-run the failure curls from Topic 5's exercise 5.1 — confirm the statuses are identical to before.
 3. Watch the timing middleware's output — including for a request that *failed*. What does the logged status tell you about middleware ordering?
 
 **Solution**
@@ -85,8 +85,8 @@ The senior version of this answer: "validation lives at the layer that has the i
 2. Same behavior, radically better shape:
 
 ```bash
-curl -i -X POST .../v1/payments/transfer ... -d '{"payerUserId":1,"payeeUserId":999,"amount":10}'
-# 404 {"status":404,"error":"No account for user 999"}   ← thrown by the typed client,
+curl -i -X POST .../v1/payment/transfer ... -d '{"payerUserId":1,"payeeUserId":999,"amount":10}'
+# 404 {"status":404,"error":"No user 999"}   ← thrown by the typed client,
 #                                                          caught by the MIDDLEWARE
 ```
 
@@ -96,7 +96,7 @@ The exception→status table now exists **once**, in one file, instead of copy-p
 
 ## Exercise 10.4 — The typed client and the concurrent saga
 
-1. Wire Concepts' `PaymentProcessorClient` (registration + config key), replace `TransferAsync`'s EF mutations with the lock + `Task.WhenAll` + compensation orchestration, and delete the old static `SemaphoreSlim`. With the processor running, do a normal transfer end to end and confirm balances via `/v1/accounts/balance`.
+1. Wire Concepts' `PaymentClient` (registration + config key), replace `TransferAsync`'s EF mutations with the lock + `Task.WhenAll` + compensation orchestration, and delete the old static `SemaphoreSlim`. With the processor running, do a normal transfer end to end and confirm balances via psql (`SELECT "Name","Balance" FROM "Users";`).
 2. Now break the downstream: **stop the processor** (Ctrl+C) and fire a transfer. What status does the caller get, and which piece of today's code chose it?
 3. Force a one-leg failure: transfer to a payee that doesn't exist. Trace what happened to the payer's money — step by step, from your app's log lines and the balances.
 
@@ -105,11 +105,11 @@ The exception→status table now exists **once**, in one file, instead of copy-p
 1. The registration is the part to internalize:
 
 ```csharp
-builder.Services.AddHttpClient<PaymentProcessorClient>(client =>
+builder.Services.AddHttpClient<PaymentClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["PaymentProcessor:BaseUrl"]!));
 ```
 
-`AddHttpClient<T>` does three jobs at once: registers `PaymentProcessorClient` in DI (constructor-inject it like anything else), gives it a factory-managed `HttpClient` (pooled sockets — never `new HttpClient()` per request, the .NET analogue of reusing a keep-alive agent), and scopes the config to *this* client only.
+`AddHttpClient<T>` does three jobs at once: registers `PaymentClient` in DI (constructor-inject it like anything else), gives it a factory-managed `HttpClient` (pooled sockets — never `new HttpClient()` per request, the .NET analogue of reusing a keep-alive agent), and scopes the config to *this* client only.
 
 2. **502** `{"status":502,"error":"Payment processor unavailable."}`. The chain: `HttpClient` throws `HttpRequestException` (connection refused) → it flies out of `TransferAsync` → the **exception middleware** maps it to 502 Bad Gateway. Nobody wrote a try/catch in the controller; the pipeline owned it. 502 (not 500) is the honest status: "*my* dependency failed," which tells the caller — and your alerting — where to look.
 
@@ -121,10 +121,10 @@ deposit(999, 50)     → 404                            ← leg 2 FAILED
 Task.WhenAll         → throws KeyNotFoundException (via the typed client's translation)
 catch:  withdraw.IsCompletedSuccessfully == true
         → deposit(alice, 50)  → 200, balance back to 1000    ← COMPENSATION
-throw   → middleware → 404 {"error":"No account for user 999"}
+throw   → middleware → 404 {"error":"No user 999"}
 ```
 
-Alice's balance dipped to 950 *and came back* — if you're quick with a second terminal you can catch the dip, which is exactly why the account locks exist (10.5): between the dip and the compensation, that account's state is a lie, and no other transfer should read it.
+Alice's balance dipped to 950 *and came back* — if you're quick with a second terminal you can catch the dip, which is exactly why the per-user locks exist (10.5): between the dip and the compensation, that user's balance is a lie, and no other transfer should read it.
 
 ## Exercise 10.5 — Deadlock on purpose (the best five minutes of the course)
 
@@ -133,10 +133,10 @@ Alice's balance dipped to 950 *and came back* — if you're quick with a second 
 
    ```bash
    for i in {1..25}; do
-     curl -s -X POST http://localhost:PORT/v1/payments/transfer \
+     curl -s -X POST http://localhost:PORT/v1/payment/transfer \
        -H "Authorization: Bearer $ALICE" -H "Content-Type: application/json" \
        -d '{"payerUserId":1,"payeeUserId":2,"amount":1}' > /dev/null &
-     curl -s -X POST http://localhost:PORT/v1/payments/transfer \
+     curl -s -X POST http://localhost:PORT/v1/payment/transfer \
        -H "Authorization: Bearer $BOB" -H "Content-Type: application/json" \
        -d '{"payerUserId":2,"payeeUserId":1,"amount":1}' > /dev/null &
    done; wait
@@ -158,9 +158,9 @@ var (first, second) = userIdA < userIdB ? (userIdA, userIdB) : (userIdB, userIdA
 
 One comparison. That's the entire distance between "passed code review" and "paged at 3am." Re-run the two-direction hammer: all 50 complete, timing logs flow continuously.
 
-4. Conservation holds — alice + bob total exact after every run. Note what's *not* in the picture anymore: Topic 7's single global `SemaphoreSlim` (which serialized *all* transfers — Alice→Bob blocked Cara→Dave for no reason). The per-account gates serialize only transfers touching the *same* accounts, and the balance math itself is anchored in the processor's atomic `UPDATE`, which is the layer that would still hold with ten API replicas.
+4. Conservation holds — alice + bob total exact after every run. Note what's *not* in the picture anymore: Topic 7's single global `SemaphoreSlim` (which serialized *all* transfers — Alice→Bob blocked Cara→Dave for no reason). The per-user gates serialize only transfers touching the *same* users, and the balance math itself is anchored in the processor's atomic `UPDATE`, which is the layer that would still hold with ten API replicas.
 
-**Talking point:** "I've produced a deadlock deliberately and fixed it with lock ordering" — then explain per-account gates vs one global lock as a *throughput* decision. Concurrency answers that mention both correctness and throughput read as lived experience.
+**Talking point:** "I've produced a deadlock deliberately and fixed it with lock ordering" — then explain per-user gates vs one global lock as a *throughput* decision. Concurrency answers that mention both correctness and throughput read as lived experience.
 
 ## Exercise 10.6 — The auditor in the background
 
@@ -178,4 +178,4 @@ One comparison. That's the entire distance between "passed code review" and "pag
 
 ---
 
-**Course complete — the whole system, one compose file up.** `docker compose up --build` at the workspace root: Postgres, the Node payment processor (single writer of money, atomic SQL), and the .NET API — validated at three layers, authenticated with JWTs, orchestrating concurrent two-leg sagas under per-account locks, watched by an in-process auditor, draining politely on SIGTERM. Every line of it you typed (except the processor — that one's your home turf) and can explain. Re-read the five big differences in the [Guide](../../guide/) one last time; you now have a production-shaped war story for each.
+**Course complete — the whole system, one compose file up.** `docker compose up --build` at the workspace root: Postgres, the Node payment processor (single writer of money, atomic SQL), and the .NET API — validated at three layers, authenticated with JWTs, orchestrating concurrent two-leg sagas under per-user locks, watched by an in-process auditor, draining politely on SIGTERM. Every line of it you typed (except the processor — that one's your home turf) and can explain. Re-read the five big differences in the [Guide](../../guide/) one last time; you now have a production-shaped war story for each.

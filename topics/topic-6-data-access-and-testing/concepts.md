@@ -14,7 +14,7 @@ Topic 5 wired the database in cookbook-style: a minimal `DbContext`, two magic `
 |---|---|
 | `schema.prisma` | your C# model classes *are* the schema (runtime types — Topic 3) |
 | `PrismaClient` | `DbContext` |
-| `prisma.user` / `prisma.account` | `DbSet<User>` / `DbSet<Account>` |
+| `prisma.user` | `DbSet<User>` (the one table — balance lives on the user) |
 | `prisma migrate dev` | `dotnet ef migrations add` + `database update` |
 | `@unique` | an index in `OnModelCreating` (you'll add one below) |
 | `update({ where, data })` | mutate the tracked entity + `SaveChangesAsync` (change tracking) |
@@ -30,7 +30,6 @@ public class PaymentDbContext : DbContext
     public PaymentDbContext(DbContextOptions<PaymentDbContext> options) : base(options) { }
 
     public DbSet<User> Users => Set<User>();
-    public DbSet<Account> Accounts => Set<Account>();
 }
 ```
 
@@ -55,7 +54,7 @@ This is the **unit of work** pattern (the official docs use exactly that term): 
 
 1. **One `SaveChangesAsync` = one implicit transaction.** The transfer's two balance mutations commit or neither does — you got atomicity without writing `BEGIN`/`COMMIT`. That's the pattern's main payoff, not a side effect.
 2. **The classic EF bug is forgetting to save.** Mutate entities, return, wonder why the database never changed. Prisma structurally can't have this bug (every write is a call); EF trades that safety for batching.
-3. **Staged entities have default ids** (`0`) until the flush — which is exactly why Topic 5's `RegisterAsync` calls `SaveChangesAsync` *twice*: the `Account` row needs `user.Id`, and the id doesn't exist until the user's insert has actually run. (With a navigation property — `User.Account` — EF would stage both, save **once**, insert in dependency order, and fix up the foreign key itself. We keep raw `UserId` ints to stay out of relations territory; know the one-save version exists.)
+3. **Staged entities have default ids** (`0`) until the flush. `RegisterAsync` can read `user.Id` only *after* `SaveChangesAsync` — before the flush it's `0`, because Postgres generates the identity value via `INSERT ... RETURNING "Id"`. Log `user.Id` before the save and you'll see `0`; the classic bug is depending on an id that doesn't exist yet. (When you later need two *related* rows in one operation, EF stages both, saves **once**, inserts in dependency order, and fixes up the foreign key itself — but our single `User` table needs only one insert, so `RegisterAsync` saves exactly once.)
 
 And the lifetime story closes its loop: "scoped `DbContext`" *means* "one unit of work per HTTP request" — the request's staged changes live and die together.
 
@@ -76,15 +75,15 @@ public partial class InitialCreate : Migration
                     .Annotation("Npgsql:ValueGenerationStrategy",
                                 NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                 Name = table.Column<string>(type: "text", nullable: false),
+                Balance = table.Column<decimal>(type: "numeric", nullable: false),
+                File = table.Column<string>(type: "text", nullable: true),
                 // ...
             });
-        // ... Accounts table ...
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)    // revert
     {
         migrationBuilder.DropTable(name: "Users");
-        // ...
     }
 }
 ```
@@ -120,7 +119,7 @@ Why a database constraint instead of checking in C# (`Users.AnyAsync(u => u.Emai
 ## LINQ-to-SQL — same surface, different engine
 
 ```csharp
-_db.Accounts.Where(a => a.Balance > 10_000)   // does NOT filter in memory
+_db.Users.Where(u => u.Balance > 10_000)   // does NOT filter in memory
 // EF translates the expression tree -> SQL:  WHERE "Balance" > 10000
 ```
 
@@ -159,19 +158,23 @@ public class PaymentServiceTests
         return new PaymentDbContext(options);
     }
 
-    private static PaymentService NewService(PaymentDbContext db)
-        => new(db, new PasswordHasher<User>());   // inject the fakes BY HAND
+    // The two services, with their fakes injected BY HAND (no mocking framework).
+    private static AuthService NewAuth(PaymentDbContext db) => new(db, new PasswordHasher<User>());
+    private static PaymentService NewPayment(PaymentDbContext db) => new(db);
+
+    // No get-balance endpoint — read the balance straight from the context.
+    private static async Task<decimal> BalanceOf(PaymentDbContext db, int id)
+        => (await db.Users.FindAsync(id))!.Balance;
 
     [Fact]  // = test(...) in jest
-    public async Task RegisterAsync_CreatesAccount_WithStartingBalance()
+    public async Task RegisterAsync_CreatesUser_WithStartingBalance()
     {
-        var service = NewService(NewDb());
-
-        var user = await service.RegisterAsync(
+        var db = NewDb();
+        var user = await NewAuth(db).RegisterAsync(
             new RegisterRequest("Alice", "alice@bank.test", "Passw0rd!"));
 
         Assert.True(user.Id > 0);
-        Assert.Equal(1000m, await service.GetBalanceAsync(user.Id));
+        Assert.Equal(1000m, user.Balance);
         Assert.NotEqual("Passw0rd!", user.PasswordHash);   // hashed, never plaintext
     }
 
@@ -179,28 +182,27 @@ public class PaymentServiceTests
     public async Task TransferAsync_MovesMoney_Exactly()
     {
         var db = NewDb();
-        var service = NewService(db);
-        var alice = await service.RegisterAsync(new RegisterRequest("Alice", "a@t.t", "x"));
-        var bob   = await service.RegisterAsync(new RegisterRequest("Bob",   "b@t.t", "x"));
+        var alice = await NewAuth(db).RegisterAsync(new RegisterRequest("Alice", "a@t.t", "x"));
+        var bob   = await NewAuth(db).RegisterAsync(new RegisterRequest("Bob",   "b@t.t", "x"));
 
-        await service.TransferAsync(alice.Id, bob.Id, 250m);
+        await NewPayment(db).TransferAsync(alice.Id, bob.Id, 250m);
 
-        Assert.Equal(750m,  await service.GetBalanceAsync(alice.Id));
-        Assert.Equal(1250m, await service.GetBalanceAsync(bob.Id));
+        Assert.Equal(750m,  await BalanceOf(db, alice.Id));
+        Assert.Equal(1250m, await BalanceOf(db, bob.Id));
     }
 
     [Fact]
     public async Task TransferAsync_Throws_WhenInsufficientFunds()
     {
-        var service = NewService(NewDb());
-        var alice = await service.RegisterAsync(new RegisterRequest("Alice", "a@t.t", "x"));
-        var bob   = await service.RegisterAsync(new RegisterRequest("Bob",   "b@t.t", "x"));
+        var db = NewDb();
+        var alice = await NewAuth(db).RegisterAsync(new RegisterRequest("Alice", "a@t.t", "x"));
+        var bob   = await NewAuth(db).RegisterAsync(new RegisterRequest("Bob",   "b@t.t", "x"));
 
         // = expect(...).rejects.toThrow(), but asserting the exception TYPE
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.TransferAsync(alice.Id, bob.Id, 5000m));
+            () => NewPayment(db).TransferAsync(alice.Id, bob.Id, 5000m));
 
-        Assert.Equal(1000m, await service.GetBalanceAsync(alice.Id));   // nothing moved
+        Assert.Equal(1000m, await BalanceOf(db, alice.Id));   // nothing moved
     }
 }
 ```

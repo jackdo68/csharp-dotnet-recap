@@ -21,7 +21,9 @@ ls publish/
 # Npgsql.dll, Microsoft.EntityFrameworkCore.dll, ... ← NuGet deps, copied out of the global cache
 
 dotnet publish/PaymentApp.dll     # runs without the project — this is what the container runs
-curl http://localhost:5000/v1/accounts/1/balance
+curl -s -X POST http://localhost:5000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Smoke","email":"smoke@bank.test","password":"Passw0rd!"}'   # 201 (or 409 on re-run — both mean it's alive)
 
 dotnet publish -c Release --self-contained -o publish-sc
 du -sh publish publish-sc
@@ -76,8 +78,10 @@ The override — `__` (double underscore) is how env vars spell the `:` hierarch
 ConnectionStrings__PaymentDb="Host=localhost;Database=payapp;Username=payapp;Password=WRONG" \
   dotnet run
 # app starts fine (config isn't validated at startup)...
-curl http://localhost:PORT/v1/accounts/1/balance
-# → 500: Npgsql "password authentication failed for user 'payapp'"
+curl -X POST http://localhost:PORT/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"X","email":"x@bank.test","password":"Passw0rd!"}'
+# → 500: Npgsql "password authentication failed for user 'payapp'"  (the register hits the DB)
 ```
 
 The failure is the proof: the env var **beat** `appsettings.json` — no dotenv, no config library, no rebuild. The configuration system layers env vars over the JSON files out of the box. In Kubernetes this exact mechanism is how a Secret becomes the connection string (`env: - name: ConnectionStrings__PaymentDb, valueFrom: secretKeyRef: ...`), and in 8.3 it's how the containerized app finds Postgres.
@@ -88,7 +92,7 @@ The failure is the proof: the env var **beat** `appsettings.json` — no dotenv,
 
 1. Write a `.dockerignore` (what are the two directories that *must* be in it, and why?).
 2. Write the multi-stage Dockerfile: SDK image to publish, `aspnet` image to run.
-3. Build it, then run it **standalone**: `docker run --rm -p 8080:8080 paymentapp`, and curl a balance. It fails — read the error and explain why `localhost` lies inside a container.
+3. Build it, then run it **standalone**: `docker run --rm -p 8080:8080 paymentapp`, and curl the register endpoint. It fails — read the error and explain why `localhost` lies inside a container.
 4. Fix it properly: grow Topic 5's `docker-compose.yml` with an `api` service so the app and Postgres share a network, and point the app at the database with the env var from 8.2. `docker compose up --build`, then curl.
 
 **Solution**
@@ -152,7 +156,8 @@ volumes:
 
 ```bash
 docker compose up --build
-curl http://localhost:8080/v1/accounts/1/balance     # your existing users — same volume, same data
+# your existing users are still there — same volume, same data:
+docker compose exec db psql -U payapp -d payapp -c 'SELECT "Id","Name","Balance" FROM "Users" ORDER BY "Id";'
 ```
 
 (Your Topics 5–6 migrations already created the schema in the `pgdata` volume, so it just works. In real deployments, migrations run as a CI step or init container — not on app startup.)
@@ -161,7 +166,7 @@ curl http://localhost:8080/v1/accounts/1/balance     # your existing users — s
 
 ## Exercise 8.4 — Graceful shutdown, observed
 
-1. Add a deliberately slow endpoint: `GET /v1/payments/slow` that awaits 5 seconds then returns (you know how — Topic 7).
+1. Add a deliberately slow endpoint: `GET /v1/payment/slow` that awaits 5 seconds then returns (you know how — Topic 7).
 2. `docker compose up --build`, curl the slow endpoint, and while it's hanging, run `docker compose stop api` from another terminal.
 3. Watch both terminals. Did your in-flight request complete or die? What did the app log? Which Node boilerplate did you just *not* write?
 
@@ -182,7 +187,7 @@ The observation:
 
 ```bash
 # terminal 1:
-curl http://localhost:8080/v1/payments/slow     # hangs...
+curl http://localhost:8080/v1/payment/slow     # hangs...
 
 # terminal 2, while it hangs:
 docker compose stop api

@@ -33,7 +33,7 @@ else
 
 ## Exercise 4.2 — The boundary enforcer (this is the big one)
 
-You receive transfer JSON from an "API". Define `record TransferRequest(string To, decimal Amount);` — the same DTO shape Topic 5's `/v1/payments/transfer` endpoint binds.
+You receive transfer JSON from an "API". Define `record TransferRequest(string To, decimal Amount);` — a DTO shape like the one Topic 5's `/v1/payment/transfer` endpoint binds.
 
 1. Deserialize a **valid** payload: `{"To":"Bob","Amount":300}` and print the result.
 2. Deserialize a **wrong-shaped** payload: `{"To":"Bob","Amount":"lots"}`. What exception, and what does its message tell you about *where* the mismatch is?

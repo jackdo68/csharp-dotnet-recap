@@ -63,7 +63,7 @@ Mutating a positional-record property (`money.Amount = 1m;`) fails with **CS8852
 
 1. Declare two records with **identical shapes**: `record TransferRequest(string To, decimal Amount);` and `record RefundRequest(string To, decimal Amount);`. Write a method `void Submit(TransferRequest req)` and try to pass it a `RefundRequest`. Read the compiler error out loud — in TS this would be legal.
 2. Declare `interface IRiskChecker { int Score(decimal amount); }` and a class `BasicRiskChecker` that has a matching `Score` method but does **not** declare `: IRiskChecker`. Try `IRiskChecker checker = new BasicRiskChecker();`. Then fix it by declaring the interface. This is the "explicit implementation" difference — TS would have accepted the shape match. (This is the same fraud-scoring idea Topic 7 makes CPU-bound.)
-3. Make two branded IDs — `record UserId(int Value);` and `record AccountId(int Value);` — and confirm the compiler refuses to let one stand in for the other. (In Topic 5, `Account.UserId` is a real foreign key — mixing the two up is a real bug this prevents.)
+3. Make two branded IDs — `record UserId(int Value);` and `record PaymentId(int Value);` — and confirm the compiler refuses to let one stand in for the other. (In the app both are just `int`s — passing a payment id where a user id belongs is a real bug this makes impossible.)
 
 **Solution**
 
@@ -93,13 +93,13 @@ IRiskChecker checker = new BasicRiskChecker();
 
 ```csharp
 record UserId(int Value);
-record AccountId(int Value);
+record PaymentId(int Value);
 
-void GetBalance(AccountId account) { }
-GetBalance(new UserId(42));       // ❌ CS1503 — branded types, no hack required
+void Refund(PaymentId payment) { }
+Refund(new UserId(42));           // ❌ CS1503 — branded types, no hack required
 ```
 
-**Talking point:** "TS asks *does it have the right shape?* C# asks *did you declare it as that thing?* The cost is mapping between look-alike DTOs; the payoff is that a `UserId` can never silently stand in for an `AccountId`."
+**Talking point:** "TS asks *does it have the right shape?* C# asks *did you declare it as that thing?* The cost is mapping between look-alike DTOs; the payoff is that a `UserId` can never silently stand in for a `PaymentId`."
 
 ## Exercise 2.4 — Nullability
 

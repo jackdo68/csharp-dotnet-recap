@@ -183,7 +183,7 @@ Console.WriteLine(bigTransfers.Count());                     // ...still counted
 
 In JS, each `.filter().map()` step eagerly allocates a whole intermediate array. A LINQ chain streams each element through the entire pipeline with no intermediates — `.filter().map().slice(0, 3)` over a million rows does a million iterations twice in JS; the LINQ version stops after three survivors. The flip side: enumerate a query twice and it *executes* twice — `.ToList()` when you need the results pinned down.
 
-**2. The same query can run somewhere else.** Because a lambda passed to LINQ can be captured as an *expression tree* (data describing the code, not just a function pointer — Topic 3's runtime types again), a provider can translate it. That's Topic 6's punchline, against the exact `Accounts` table you'll build in Topic 5: `_db.Accounts.Where(a => a.Balance > 1000m)` doesn't filter in memory — EF Core turns that exact C# into `WHERE "Balance" > 1000` in SQL. Prisma can't do this with a JS callback (`prisma.account.findMany` takes a JSON-ish filter object instead, precisely because a JS arrow function is opaque at runtime).
+**2. The same query can run somewhere else.** Because a lambda passed to LINQ can be captured as an *expression tree* (data describing the code, not just a function pointer — Topic 3's runtime types again), a provider can translate it. That's Topic 6's punchline, against the exact `Users` table you'll build in Topic 5: `_db.Users.Where(u => u.Balance > 1000m)` doesn't filter in memory — EF Core turns that exact C# into `WHERE "Balance" > 1000` in SQL. Prisma can't do this with a JS callback (`prisma.user.findMany` takes a JSON-ish filter object instead, precisely because a JS arrow function is opaque at runtime).
 
 One curiosity you'll see in older code: LINQ also has a SQL-ish *query syntax* — `from t in transfers where t.Amount > 500m select t.From`. It compiles to exactly the method calls above; modern codebases overwhelmingly use method syntax, so read it if you meet it, don't write it.
 
@@ -229,7 +229,7 @@ When to reach for each:
 
 | Reach for | When |
 |---|---|
-| `class` | identity + changing state — a `Transfer` whose `Status` moves through a workflow (Pending → Completed → Failed), or an `Account` whose `Balance` changes |
+| `class` | identity + changing state — a `Transfer` whose `Status` moves through a workflow (Pending → Completed → Failed), or a `User` whose `Balance` changes |
 | `record` | data that flows — DTOs, requests; you want value *equality* and immutability |
 | `struct` | tiny, immutable, primitive-like values used in bulk — a fee rate, a coordinate, a date range; or hot paths where allocation shows up in profiling |
 
@@ -246,7 +246,7 @@ One footgun worth naming: **mutable structs**. Because every assignment copies, 
 ```csharp
 namespace PaymentApp.Models;   // file-scoped: applies to the whole file
 
-public class Account { /* ... */ }
+public class User { /* ... */ }
 ```
 
 `namespace X;` puts every type in the file into that named group; other files say `using PaymentApp.Models;` to see them — the *namespace*, never a file path. Conventions: namespace mirrors the folder (`Models/` → `PaymentApp.Models`), one public type per file, file named after the type.
@@ -273,7 +273,7 @@ Where this bites (and helps) day to day:
 - **No object literals.** There's no `const x = { name: "Jack" }` — every shape must be declared first. When you miss literals, a one-line `record` is the cure.
 - **Interfaces are implemented explicitly.** In TS, a class satisfies an interface just by having matching methods. In C#, `PaymentService` is an `IPaymentService` **only** because it declares `: IPaymentService` — delete that clause and compilation fails even though every method still matches. (Convention: every interface is named with an `I` prefix.) DI (Topic 5) binds by these declared relationships, never by shape — and `IPaymentService`/`PaymentService` is the exact pair you'll register in Topic 5.
 - **No assignment between look-alikes.** Two DTOs with identical fields still can't be passed for each other — you map field-by-field (the AutoMapper library exists purely to ease this friction).
-- **The flip side is a feature:** accidental substitution is impossible. A `CustomerId` and an `AccountId` can both wrap an `int` and never be confused — what TS needs the "branded types" hack for, C# gives you by default.
+- **The flip side is a feature:** accidental substitution is impossible. A `UserId` and a `PaymentId` can both wrap an `int` and never be confused — what TS needs the "branded types" hack for, C# gives you by default.
 
 One more TS habit to drop: C# interfaces are used almost only as *behaviour contracts* (methods to implement), not to describe plain data shapes — classes and records do that job.
 

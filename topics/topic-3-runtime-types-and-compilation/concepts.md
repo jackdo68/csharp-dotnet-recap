@@ -44,7 +44,7 @@ void Describe<T>() => Console.WriteLine($"T is {typeof(T).Name}");
 Describe<Transfer>();   // "T is Transfer"
 ```
 
-In TS, `typeof T` inside a generic function is meaningless — the type parameter never reaches the runtime. In C#, `Set<Account>()` in EF Core (Topic 6, against the real `Account` table) uses its type argument at runtime to find the right table.
+In TS, `typeof T` inside a generic function is meaningless — the type parameter never reaches the runtime. In C#, `Set<User>()` in EF Core (Topic 6, against the real `User` table) uses its type argument at runtime to find the right table.
 
 **3. Runtime type checks that are actually checks.**
 

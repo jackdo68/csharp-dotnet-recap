@@ -1,45 +1,57 @@
-# Topic 5: Web API & Dependency Injection — batteries included
+# Topic 5: Web API & Dependency Injection
 
-## The one question this topic answers
+> **How does a real .NET service hang together — and why is DI the organizing principle?**
 
-> **How does a real .NET service hang together — and why is dependency injection the organizing principle instead of an optional pattern?**
+## Node vs .NET philosophy
 
-## The philosophy split
+| Node | .NET |
+|------|------|
+| Minimal core, you assemble the stack | Batteries included (web, ORM, config, logging) |
+| You wire dependencies yourself | Built-in DI container wires everything |
+| Freedom to choose | Convention over configuration |
 
-Node's philosophy: a minimal core, then *you assemble* the stack — Express, an ORM, validation, a test runner — and wire the pieces together yourself. .NET's philosophy: one platform **ships** the web framework (ASP.NET Core), the ORM (EF Core), config, logging, and — crucially — a built-in **dependency injection container** as the single organizing principle. You never `new` up a dependency: a class declares what it needs in its constructor, and the wiring is registered once at startup.
-
-The other half is **convention over configuration**: controller classes auto-route from attributes, `IThing`/`Thing` pairs, the `Async` suffix, namespaces mirroring folders. More upfront structure than Node — but every unfamiliar .NET codebase looks broadly alike, which is exactly what you want when joining one.
+**Key .NET conventions:**
+- Controller classes auto-route from attributes
+- `IThing`/`Thing` interface pairs
+- `Async` suffix on async methods
+- Namespaces mirror folders
 
 ## What we're building (Topics 5–10)
 
-A small **payment service** — the app the rest of the course grows one topic at a time. It has **one** database model, `User`, and four endpoints across three controllers:
+A **PaymentApp** — one table, four endpoints:
 
-| Endpoint | Controller | Access | Arrives in |
-|---|---|---|---|
-| `POST /v1/auth/register` — name, email, password → new user | `AuthController` | public | **Topic 5** (returns a token from Topic 9) |
-| `POST /v1/payment/transfer` — payer, payee, amount | `PaymentController` | public *for now* | **Topic 5** |
-| `POST /v1/document/upload` — a `.txt`, stored on disk | `DocumentController` | private | Topic 7 |
-| `POST /v1/auth/login` — email + password → JWT | `AuthController` | public | Topic 9 |
+| Endpoint | Controller | Topic |
+|----------|------------|-------|
+| `POST /v1/auth/register` | `AuthController` | 5 |
+| `POST /v1/payment/transfer` | `PaymentController` | 5 |
+| `POST /v1/document/upload` | `DocumentController` | 7 |
+| `POST /v1/auth/login` | `AuthController` | 9 |
 
-The whole domain is **one table**: a `User` with a name, email, hashed password, a `decimal Balance`, and a `File` (the name of an uploaded document). No separate `Account` table — the balance lives on the user, and there is deliberately **no get-balance endpoint** (you'd read it from the DB in a test). It lives in **PostgreSQL from day one**: you write the service once, against the real database, and Topic 6 unpacks how the data layer works.
+**The `User` model:**
+- `Id`, `Name`, `Email`, `PasswordHash`, `Balance` (decimal), `File` (uploaded doc)
+- No separate `Account` table — balance lives on the user
+- PostgreSQL from day one
 
-> **The staged build.** Topic 5 register just *creates* the user (password hashed). Topic 7 adds document upload (the threading anchor) and exposes the race in transfer. Topic 8 ships it in Docker. Topic 9 adds login, JWT (register + login both return tokens), and the payer-is-you ownership check. Topic 10 rebuilds the plumbing production-style with an external processor reached via a `PaymentClient`.
+**The staged build:**
 
-## The shape of the app (essentials only — full code in Hands On)
+| Topic | Adds |
+|-------|------|
+| 5 | Register (creates user), Transfer |
+| 7 | Document upload, exposes race condition |
+| 8 | Docker deployment |
+| 9 | Login, JWT, ownership checks |
+| 10 | External processor via `PaymentClient` |
 
-Every layer is a small, single-purpose file. The dependency arrow points **downward**, and nothing ever `new`s up the thing below it — the container injects it:
+## App structure
 
 ```
-Controllers  (HTTP shell)        AuthController · PaymentController
-    │  depends on
-Services     (business logic)    IAuthService/AuthService · IPaymentService/PaymentService
-    │  depends on
-Data         (DB session)        PaymentDbContext
-    │  maps
-Models       (domain + DTOs)     User · RegisterRequest · TransferRequest · UserResponse
+Controllers  →  Services  →  DbContext  →  Models
+(HTTP shell)    (logic)      (DB session)   (domain)
 ```
 
-**The one model** — a plain class that is *about to be* the database schema (Topic 3's runtime types are why no `schema.prisma` is needed):
+Dependencies point downward. Nothing ever `new`s up the layer below — the container injects it.
+
+### The model (no schema file needed — types are the schema)
 
 ```csharp
 public class User
@@ -47,26 +59,26 @@ public class User
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public string Email { get; set; } = "";
-    public string PasswordHash { get; set; } = "";   // NEVER the password itself
-    public decimal Balance { get; set; }             // money = decimal. Always.
-    public string? File { get; set; }                // uploaded doc filename (Topic 7)
+    public string PasswordHash { get; set; } = "";  // NEVER the password itself
+    public decimal Balance { get; set; }            // money = decimal
+    public string? File { get; set; }               // uploaded doc (Topic 7)
 }
 ```
 
-**DTOs are `record`s** (Topic 2's rule — immutable data that flows). The response type is deliberately *not* the entity, so `PasswordHash` can't leak into JSON — the same reason your Node code never `res.json(userDoc)` straight from Mongo:
+### DTOs are `record`s (immutable data that flows)
 
 ```csharp
 public record RegisterRequest(string Name, string Email, string Password);
 public record TransferRequest(int PayerUserId, int PayeeUserId, decimal Amount);
-public record UserResponse(int Id, string Name, string Email);
+public record UserResponse(int Id, string Name, string Email);  // no PasswordHash!
 ```
 
-**Two services, each behind an interface.** Controllers depend on the *interface*, never the concrete class — so tests can hand them a fake (Topic 6), and the container binds by the declared relationship (Topic 2's nominal typing):
+### Services behind interfaces (for testability)
 
 ```csharp
 public interface IAuthService
 {
-    Task<User> RegisterAsync(RegisterRequest request);   // login/token added in Topic 9
+    Task<User> RegisterAsync(RegisterRequest request);
 }
 
 public interface IPaymentService
@@ -75,7 +87,7 @@ public interface IPaymentService
 }
 ```
 
-**Controllers are thin HTTP shells** — they translate a service result (or a typed exception) into an HTTP status and get out of the way. The service *states what went wrong* with a typed exception (Topic 4); the controller *decides what that means in HTTP*:
+### Controllers are thin HTTP shells
 
 ```csharp
 [ApiController]
@@ -83,9 +95,9 @@ public interface IPaymentService
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
-    public AuthController(IAuthService auth) => _auth = auth;   // constructor injection
+    public AuthController(IAuthService auth) => _auth = auth;  // constructor injection
 
-    [HttpPost("register")]                       // POST /v1/auth/register
+    [HttpPost("register")]
     public async Task<ActionResult<UserResponse>> Register(RegisterRequest request)
     {
         var user = await _auth.RegisterAsync(request);
@@ -94,78 +106,86 @@ public class AuthController : ControllerBase
 }
 ```
 
-The full `AuthController`, `PaymentController`, both services, the `PaymentDbContext`, and the `Program.cs` wiring are built end-to-end in **Hands On** — that's where you type the app in.
+### New syntax cheat sheet
 
-New syntax you'll meet across those files:
+| C# | Meaning | Node/TS equivalent |
+|----|---------|-------------------|
+| `[ApiController]` | Attribute (decorator) | `@Controller()` in NestJS |
+| `: ControllerBase` | Inheritance | `extends` |
+| `: IAuthService` | Interface implementation | `implements` |
+| `ActionResult<T>` | T or HTTP result | Union return type |
+| `new { x = 1 }` | Anonymous type | Object literal |
 
-- `[ApiController]`, `[Route(...)]`, `[HttpPost]` — **attributes**: C#'s decorators, exactly NestJS's `@Controller()` / `@Post()`, in square brackets above the target.
-- `: ControllerBase` / `: IAuthService` — the colon is `extends` and `implements` in one.
-- `ActionResult<T>` — "either a `T` or any HTTP result like `NotFound()`" — how a nominal language expresses TS's union return.
-- `=> _auth = auth;` — an expression-bodied constructor: the same one-liner arrow from Topic 2.
-- `new { status = "completed" }` — an **anonymous type**: the one place C# allows an ad-hoc object literal.
+## DI registration
 
-## Dependency injection registration
-
-The wiring lives in `Program.cs` and is read once at startup. This single block is the "assemble it yourself" of Express, done declaratively:
+All wiring lives in `Program.cs`, read once at startup:
 
 ```csharp
 builder.Services.AddControllers();
 builder.Services.AddDbContext<PaymentDbContext>(o => o.UseNpgsql(connectionString));
-builder.Services.AddScoped<IAuthService, AuthService>();       // "when asked for IAuthService, give AuthService"
+builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 ```
 
-## DI lifetimes (you will get asked this)
+## DI lifetimes (interview favorite)
 
-- **`AddScoped`** — one instance per HTTP request (the usual default).
-- **`AddTransient`** — a new instance every time it's asked for.
-- **`AddSingleton`** — one instance for the whole app lifetime.
+| Lifetime | Meaning | Use for |
+|----------|---------|---------|
+| `AddScoped` | One instance per HTTP request | DbContext, services |
+| `AddTransient` | New instance every time | Lightweight, stateless helpers |
+| `AddSingleton` | One instance for app lifetime | Stateless, thread-safe utilities |
 
-Read the registrations through that lens — each chose deliberately:
+**PaymentApp choices:**
 
 | Registration | Lifetime | Why |
-|---|---|---|
-| `PaymentDbContext` | **scoped** | one DB session = one unit of work per request; sharing it app-wide would leak state between requests |
-| `IAuthService` / `IPaymentService` | **scoped** | each holds the scoped `DbContext`, so it must not outlive one — a service's lifetime is bounded by its *shortest-lived* dependency |
-| `IPasswordHasher<User>` | **singleton** | stateless and thread-safe — one instance serves everyone forever |
+|--------------|----------|-----|
+| `PaymentDbContext` | Scoped | One DB session per request |
+| `AuthService`, `PaymentService` | Scoped | Hold scoped DbContext |
+| `IPasswordHasher<User>` | Singleton | Stateless, thread-safe |
 
-That second row has real teeth: a longer-lived service holding a shorter-lived dependency is a **captive dependency**, and the container refuses to build one — Hands On makes you trigger that refusal on purpose and read the error.
+⚠️ **Captive dependency:** A singleton holding a scoped service = error. The container catches this at startup.
 
-> **"Scoped" ≠ "a database connection per request."** The `DbContext` is a *session* — the change tracker and unit-of-work bookkeeping — and it's cheap; that's what's per-request. The physical Postgres connection is a separate layer with a shorter lifetime: EF Core rents one from Npgsql's **connection pool** only when it actually hits the DB (a query, `SaveChangesAsync`) and returns it the instant that operation finishes — not at the end of the request (a transaction is the exception; it holds one open). So concurrent requests each get their own `DbContext` but share a pool of ~100 reused connections — exactly like `pg`/Prisma, where each query borrows from a pool rather than opening a new `pg.Client`. (This is also *why* `DbContext` isn't thread-safe — one sequential session — while the pool underneath it is.)
+**DbContext ≠ connection:**
+- `DbContext` (scoped) = session + change tracker — cheap, per-request
+- Connection = borrowed from pool only during actual DB calls, returned immediately
+- Same as `pg`/Prisma connection pooling
 
-### What's actually in memory while the app runs — two tiers
+## Memory: two tiers
 
-The lifetimes split everything into two tiers, and the split *is* the design:
+| Tier 1 — App lifetime | Tier 2 — Per request |
+|-----------------------|----------------------|
+| Container + registrations | Controller instance |
+| Singletons (hasher, config) | Scoped services (AuthService, PaymentService) |
+| Connection pool + TCP sockets | DbContext instance |
 
-- **Tier 1 — resident for the whole process** (built once at startup, disposed only at shutdown): the **container** itself, the **registrations** (the `interface → implementation + lifetime` *recipes* — the container keeps the recipe forever and mints instances from it), and every **singleton** — `IPasswordHasher<User>`, config, logging, `IHttpClientFactory`, and Npgsql's **connection pool with its live TCP connections**.
-- **Tier 2 — created per request, released at request end**: the request **scope**, the **controller**, the **scoped** services (`DbContext`, `AuthService`, `PaymentService`), and any transients. When the response is sent, the scope is disposed — scoped `IDisposable`s get `Dispose()`d deterministically (the `DbContext` returns its connection to the pool), then the objects become garbage the GC reclaims later.
+**The trade-off:** Fixed cost (Tier 1 stays in memory) so that minting fresh per-request objects is cheap and resources release immediately when the response is sent.
 
-| Per request, freed after? | | Resident for app lifetime? | |
-|---|---|---|---|
-| controller instance | **yes** | the container | **no** (stays) |
-| `AuthService` / `PaymentService` | **yes** | the registrations (recipes) | **no** (stays) |
-| `PaymentDbContext` instance | **yes** (session ends) | singletons (hasher, config) | **no** (stays) |
-| the DB *connection* it used | **no** — back to the pool | the connection pool + its sockets | **no** (stays) |
+**Node equivalent:** Module-level `new Pool()` / Prisma client = Tier 1. Handler locals = Tier 2.
 
-The trade in one line: you pay a fixed cost — the container, the recipes, and the singletons stay in memory — so that minting a fresh controller + service + `DbContext` per request is cheap and their resources release deterministically the moment the response is sent. **Node anchor:** your Express app already has this shape informally — a module-level `new Pool()` / singleton Prisma client lives for the process (Tier 1) while each handler's locals die per request (Tier 2); .NET just names the two tiers (`AddSingleton` vs `AddScoped`) and adds a deterministic `Dispose` at the request boundary.
+⚠️ **Fire-and-forget trap:**
 
-> **Watch out:** fire-and-forget work that outlives the response (`_ = Task.Run(() => useTheDbContext())`) will hit `ObjectDisposedException` — the scope disposed the `DbContext` out from under it. The fix is a fresh scope via `IServiceScopeFactory`, which is exactly Topic 10's background-auditor pattern.
+```csharp
+_ = Task.Run(() => useTheDbContext());  // ❌ DbContext disposed after response
+```
 
-## Trace one request (so the magic is mechanical)
+Fix: Create a fresh scope via `IServiceScopeFactory` (Topic 10).
 
-1. `POST /v1/payment/transfer` arrives; ASP.NET Core matches it to `PaymentController.Transfer`.
-2. To build the controller, the container sees it needs `IPaymentService`; building *that* needs `PaymentDbContext` — it resolves the whole graph by reading constructor parameter *types at runtime* (Topic 3's runtime types making Topic 5's DI possible).
-3. The JSON body is auto-deserialized into `TransferRequest` — Topic 4's boundary enforcement; `{"amount":"heaps"}` becomes an automatic 400 before your code runs.
-4. `await _db...` frees the thread during the real SQL round-trip (Topic 7 explains where it goes).
-5. The returned object is auto-serialized to JSON (camelCased for JS clients).
+## Request lifecycle
 
-In Express you'd wire middleware and instantiate everything yourself. Here the wiring comes from registrations — more upfront structure, far less glue code.
+| Step | What happens |
+|------|--------------|
+| 1 | `POST /v1/payment/transfer` arrives |
+| 2 | ASP.NET matches route → `PaymentController.Transfer` |
+| 3 | Container builds controller → needs `IPaymentService` → needs `DbContext` (resolves whole graph via runtime types) |
+| 4 | JSON body → `TransferRequest` (invalid JSON = automatic 400) |
+| 5 | `await _db...` frees thread during DB round-trip |
+| 6 | Return object → JSON (camelCased) |
 
 ## Interview talking points
 
-- Constructor injection + the three lifetimes (`Scoped` vs `Transient` vs `Singleton`) — the most likely C#-specific question. Know the failure story: a **captive dependency** (singleton holding a scoped `DbContext`), caught by the container at startup.
-- *Why* DI: loose coupling and testability — hand the service a fake database in tests (Topic 6 does exactly that), no module-mocking rituals.
-- Controllers depend on interfaces, never concrete classes; the container binds by declared relationships (Topic 2's nominal typing).
-- Attributes ≈ decorators; `[ApiController]` gives automatic model validation → 400s.
-- Return DTOs, not entities — "so the password hash can't leak into JSON" is a senior-sounding sentence because it's a junior-shaped bug.
+- **Three lifetimes:** Scoped (per-request), Transient (every time), Singleton (app lifetime). Know the captive dependency failure.
+- **Why DI:** Loose coupling + testability. Hand services a fake DB in tests (Topic 6).
+- **Controllers:** Depend on interfaces, not concrete classes. Container binds by declared types.
+- **Attributes:** `[ApiController]` = automatic model validation → 400s. Same as NestJS decorators.
+- **DTOs vs entities:** Return DTOs so password hash can't leak into JSON.

@@ -221,7 +221,14 @@ Console.WriteLine(rateC.Percent); // 2.90 — "copy" was never a copy
 
 The class behavior is exactly the JS bug you've hunted before — mutating what you thought was a copy. The struct version is immune by construction: there's no sharing to leak through.
 
-One level deeper: a struct's data lives *inline* — inside the variable, the array slot, or the containing object — rather than as a pointer to a separate heap allocation. Consequences: no garbage-collector pressure, and a `FeeRate[1_000_000]` is one contiguous block of memory instead of a million scattered objects. Structs can't participate in inheritance, and can't be `null` — unless you write `FeeRate?`, which is the same `Nullable<T>` mechanism as `int?`.
+One level deeper — where the bytes actually live. This is the **heap vs stack** split, and it's the physical reason the two kinds behave differently:
+
+- **Reference types (`class`, `record`, arrays, `string`) live on the heap.** `new` allocates the object on the managed heap and hands your variable a *reference* (a pointer) to it. The garbage collector owns that memory and reclaims it once nothing points there. This is exactly the JS object model — every `{}` in JS is a heap object too.
+- **Value types (`struct`, `int`, `bool`, `decimal`) live inline.** A local struct sits directly on the **stack** (the per-call scratch memory that unwinds when the method returns); a struct *field* rides inside its containing object wherever that lives. No separate allocation, no pointer, no GC involvement.
+
+Consequences of inline storage: no garbage-collector pressure, and a `FeeRate[1_000_000]` is one contiguous block of memory instead of a million scattered heap objects the GC has to chase. Two caveats keep the model honest: a struct that's a *field of a class* rides along on the heap inside that object, and a struct handed to an `object`/interface variable gets **boxed** — copied onto the heap behind a reference. The rule is about the *declared* value type, not an absolute "structs never touch the heap." JS gives you no knob here — every non-primitive is a heap object and the engine decides the rest; `struct` is C# handing you the choice.
+
+Structs can't participate in inheritance, and can't be `null` — unless you write `FeeRate?`, which is the same `Nullable<T>` mechanism as `int?`.
 
 **The plot twist:** you've been using structs all along. `int`, `bool`, `decimal`, `DateTime`, `TimeSpan`, `Guid` — all structs. That's *why* they copy like primitives. "Primitive" isn't a special category in C#; it's just "small struct from the standard library."
 
@@ -240,6 +247,47 @@ readonly record struct FeeRate(decimal Percent);   // value type + value equalit
 ```
 
 One footgun worth naming: **mutable structs**. Because every assignment copies, mutating a struct you got *from* somewhere (a list element, a property getter) often mutates a temporary copy that's instantly discarded — the change silently vanishes. That's why the guidance is always "structs should be immutable," and why the example above only mutated local variables.
+
+## Functions live in a type — there are no free functions
+
+In TS a function can belong to nothing — declare it at the top of a file and call it:
+
+```typescript
+function calculateFee(amount: number) { return amount * 0.015; }
+```
+
+C# has **no free-standing functions**. Every method must live inside a type — a `class`, `struct`, `record`, or `interface`. The plain-utility-function equivalent is a `static` method on a class:
+
+```csharp
+public static class Fees
+{
+    public static decimal Calculate(decimal amount) => amount * 0.015m;
+}
+// called as Fees.Calculate(100m) — no 'new' needed
+```
+
+`static` = "belongs to the type, not to an instance." That's C#'s spelling of "just a function."
+
+**But functions are still first-class values.** "Everything lives in a type" governs where a *method* is declared — it isn't a ban on passing behaviour around. A function you store, pass, or return is a **delegate**, and the built-in delegate types cover the everyday cases:
+
+```csharp
+Func<decimal, decimal> fee = a => a * 0.015m;         // a function VALUE (last type param = return type)
+Action<string> log = msg => Console.WriteLine(msg);   // returns void
+decimal x = fee(100m);
+```
+
+`Func<...>` / `Action<...>` + a lambda is what you reach for anywhere you'd pass an arrow function in TS — LINQ's `.Where(t => ...)`, callbacks, event handlers. So there are three shapes, and they map cleanly:
+
+| C# form | Lives where | TS analogue |
+|---|---|---|
+| **method** | on a type (`static` or instance) | a class method, or a module-level `function` |
+| **local function** | inside a method body | a nested named `function` |
+| **lambda / delegate** | a *value* held in a variable | an arrow function you assign or pass |
+
+Two footnotes that trip people up:
+
+- **Top-level statements are sugar.** Modern `Program.cs` lets you write executable lines — and even a `void Greet()` — with no visible class. The compiler wraps it all in an auto-generated `Main` inside a hidden class, so the rule still holds underneath: a top-level helper is really a *local function* inside `Main`.
+- **A local function is a method, not a delegate.** A helper you nest inside another method (say a `bool IsValid(...)` used only there) isn't a `Func<>` — it's a real, optionally `static`, method with no per-call allocation, and it can be called *before* its own declaration (unlike `var f = () => ...`, which must be declared first). Prefer it for named local helpers; reach for `Func`/`Action` only when you genuinely need a *value* to pass around or store.
 
 ## Namespaces — how code finds other code
 
@@ -284,3 +332,5 @@ One more TS habit to drop: C# interfaces are used almost only as *behaviour cont
 - Nominal vs structural: "TS asks *does it have the right shape?* C# asks *did you declare it as that thing?*" — and the branded-types-for-free upside.
 - The `:` symbol is both `extends` and `implements`: base class first, then interfaces.
 - "`decimal` and `DateTime` are structs — value types I could have defined myself. C# doesn't have a magic 'primitive' category like JS; it has value types vs reference types, and `struct` vs `class` is how you pick a side."
+- Heap vs stack: "reference types live on the GC heap and pass by reference like JS objects; value types live inline on the stack (or inside their owner) and copy — that's the physical reason a `struct` copies and a `class` shares."
+- Functions vs methods: "C# has no free-standing functions — every method lives in a type. A `static` method is the plain-function equivalent; a `Func`/`Action` lambda is a function *value* you pass around; a local function is a real nested method, not a delegate."

@@ -128,6 +128,19 @@ builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 ```
 
+Those five lines are **two different kinds of method**, and it matters:
+
+| Category | Methods here | What it registers |
+|----------|--------------|-------------------|
+| **Lifetime primitives** | `AddScoped`, `AddSingleton` (and `AddTransient`) | *One* service + how long its instance lives |
+| **Feature bundles** | `AddControllers`, `AddDbContext` | *Many* registrations + config, built on top of the primitives |
+
+- `AddScoped<IAuthService, AuthService>()` is a primitive — one service, one lifetime.
+- `AddDbContext<PaymentDbContext>(…)` is a bundle that **internally calls `AddScoped`** (Scoped is its default) and also wires up `DbContextOptions` with your provider/connection string. That's *why* `DbContext` shows up under Scoped below — `AddDbContext` **is** a scoped registration, it just doesn't say so on the tin.
+- `AddControllers()` isn't a lifetime registration at all — it turns on the whole MVC subsystem (routing, model binding, JSON). And the twist: your controllers are **not** registered in the container by default; a per-request *controller activator* creates them (pulling their constructor deps from DI). So a controller behaves "new per request" through a different mechanism than `AddScoped`.
+
+> **Node/TS anchor:** the primitives are NestJS's `@Injectable({ scope })` — one provider, one lifetime. The bundles are the module `imports` (`TypeOrmModule.forRoot()`, `JwtModule.register()`) — a feature module that registers a pile of providers with sensible lifetimes for you. `AddDbContext` speaks "scoped"; `AddControllers` speaks "wire up MVC."
+
 ## DI lifetimes (interview favorite)
 
 | Lifetime | Meaning | Use for |

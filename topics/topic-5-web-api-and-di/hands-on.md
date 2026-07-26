@@ -262,6 +262,15 @@ app.MapControllers();
 app.Run();
 ```
 
+**Where does `args` come from?** There's no `Main(string[] args)` in sight — this file uses **top-level statements**, and the compiler makes `args` implicitly available in that scope (it's the process command-line array, the same one a classic `static void Main(string[] args)` receives). `CreateBuilder(args)` forwards it into the config system so command-line flags can **override** configuration:
+
+```bash
+dotnet run --urls http://0.0.0.0:8080 --environment Staging
+# --urls and --environment land in builder.Configuration because args was passed
+```
+
+Pass `CreateBuilder()` with no args and those flags are silently ignored — a real gotcha when a container's `--urls` mysteriously does nothing. (Node/TS anchor: it's `process.argv`, but wired into config instead of read by hand.)
+
 **Then the schema (cookbook now — Topic 6 opens it up) and run:**
 
 ```bash

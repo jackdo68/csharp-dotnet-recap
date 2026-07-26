@@ -106,6 +106,33 @@ public class AuthController : ControllerBase
 }
 ```
 
+### Where does a request bind from? (body / route / query)
+
+The `Register(RegisterRequest request)` above never says *where* `request` comes from — `[ApiController]` **infers** the source from the parameter's type and the route template:
+
+| Parameter | Inferred source | Attribute | Wire location |
+|-----------|-----------------|-----------|---------------|
+| Complex type (`record`/class) | body | `[FromBody]` (implied) | JSON body |
+| Simple type matching a `{token}` | route | `[FromRoute]` | `/users/{id}` |
+| Any other simple type | query | `[FromQuery]` | `?page=2` |
+| `IFormFile` | form | `[FromForm]` | multipart |
+
+So a `RegisterRequest` record → JSON body, `camelCase` on the wire (`Password` ⇄ `password`). An action can mix all three:
+
+```csharp
+// POST /v1/payment/users/1/transfer?idempotencyKey=abc-123
+// body: { "payeeUserId": 2, "amount": 100.00 }
+[HttpPost("users/{payerUserId}/transfer")]
+public IActionResult Transfer(
+    int payerUserId,                    // [FromRoute] — name matches {payerUserId}
+    [FromQuery] string idempotencyKey,  // query string
+    TransferBody body)                  // [FromBody] — complex type, inferred
+```
+
+Two rules: **only one `[FromBody]` per action** (the body stream deserializes once), and **never** put secrets like `Password` in route/query (URLs get logged and cached) — that's why the auth DTOs are body-bound.
+
+> **Node/TS anchor:** this is Express's `req.body` / `req.params` / `req.query`, or NestJS's `@Body()` / `@Param()` / `@Query()` — same three sources. The C# nicety: `[ApiController]` infers the common cases, so you drop the `@Body()`/`@Param()` boilerplate. Without `[ApiController]` there's no inference and you write `[FromBody]` yourself.
+
 ### New syntax cheat sheet
 
 | C# | Meaning | Node/TS equivalent |

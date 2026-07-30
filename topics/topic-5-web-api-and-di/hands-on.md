@@ -1,24 +1,24 @@
 # Topic 5: Hands On
 
-> **The PaymentApp build:** **Topic 5 (you are here): the API is born — straight onto Postgres** → Topic 6 EF Core unpacked + tests → Topic 7 document upload + the transfer race → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
+> **The PaymentApp build:** Solution structure → Domain models → Runtime utilities → Exceptions → **Web API + EF Core** → EF Core deep dive → Transfer endpoint → Document upload → Authentication → Production
 
-This is where the app is **built** — the full code for every file is below. Type it in (don't paste), then run the drills. Budget ~90 minutes.
+This is where PaymentApp becomes a real API. We'll add services to the Application layer, EF Core to Infrastructure, and controllers to the Api layer — all wired together with dependency injection and connected to PostgreSQL.
 
-## Exercise 5.0 — Build the API, in dependency order
+**Prerequisites:** Complete Topic 4 hands-on (you should have domain models and exceptions).
 
-Scaffold, add packages, write the compose file, `docker compose up -d`, then type the files **bottom of the dependency chain upward** — each references only files that already exist.
+**Time:** ~90 minutes
 
-```bash
-dotnet new webapi --use-controllers -n PaymentApp
-cd PaymentApp
-rm Controllers/WeatherForecastController.cs WeatherForecast.cs 2>/dev/null
+---
 
-dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL   # Postgres driver + EF provider (the `pg` of .NET)
-dotnet add package Microsoft.EntityFrameworkCore.Design    # migrations tooling
-dotnet add package Microsoft.Extensions.Identity.Core      # just the password hasher
-```
+## Exercise 5.1 — Start PostgreSQL
 
-`docker-compose.yml` — the identical file a Node team would write:
+We need a database. Docker Compose makes this identical to what you'd do in Node.
+
+**Task:** Create a docker-compose file and start PostgreSQL.
+
+**Solution**
+
+Create `docker-compose.yml` in the `PaymentApp` root (next to the `.sln` file):
 
 ```yaml
 services:
@@ -31,64 +31,164 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data   # data survives container restarts
+      - pgdata:/var/lib/postgresql/data
 
 volumes:
   pgdata:
 ```
 
+Start it:
+
 ```bash
 docker compose up -d
 ```
 
-**1. `Models/User.cs`** — the one and only table. Balance lives here; there is no `Account`:
+Verify it's running:
 
-```csharp
-namespace PaymentApp.Models;
-
-public class User
-{
-    public int Id { get; set; }
-    public string Name { get; set; } = "";
-    public string Email { get; set; } = "";
-    public string PasswordHash { get; set; } = "";   // NEVER the password itself
-    public decimal Balance { get; set; }             // money = decimal. Always.
-    public string? File { get; set; }                // uploaded .txt filename (filled in Topic 7)
-}
+```bash
+docker compose exec db psql -U payapp -c "SELECT 1;"
 ```
 
-**2. `Models/Requests.cs`** — the DTOs (records: immutable data that flows). `UserResponse` is deliberately *not* the entity, so `PasswordHash` can't leak into JSON:
+---
 
-```csharp
-namespace PaymentApp.Models;
+## Exercise 5.2 — Add EF Core packages
 
-public record RegisterRequest(string Name, string Email, string Password);
-public record TransferRequest(int PayerUserId, int PayeeUserId, decimal Amount);
-public record UserResponse(int Id, string Name, string Email);
+**Task:** Add EF Core packages to the Infrastructure project.
+
+**Solution**
+
+```bash
+dotnet add src/PaymentApp.Infrastructure/PaymentApp.Infrastructure.csproj \
+  package Npgsql.EntityFrameworkCore.PostgreSQL
+
+dotnet add src/PaymentApp.Infrastructure/PaymentApp.Infrastructure.csproj \
+  package Microsoft.EntityFrameworkCore.Design
 ```
 
-**3. `Data/PaymentDbContext.cs`** — the database session (minimal; Topic 6 unpacks every line):
+Also add the password hasher to Infrastructure:
+
+```bash
+dotnet add src/PaymentApp.Infrastructure/PaymentApp.Infrastructure.csproj \
+  package Microsoft.Extensions.Identity.Core
+```
+
+---
+
+## Exercise 5.3 — Create the DbContext
+
+The `DbContext` is EF Core's unit of work — it tracks changes and commits them to the database.
+
+**Task:** Create `PaymentDbContext` in Infrastructure.
+
+**Solution**
+
+Create `src/PaymentApp.Infrastructure/Data/PaymentDbContext.cs`:
 
 ```csharp
 using Microsoft.EntityFrameworkCore;
-using PaymentApp.Models;
+using PaymentApp.Domain.Entities;
 
-namespace PaymentApp.Data;
+namespace PaymentApp.Infrastructure.Data;
 
 public class PaymentDbContext : DbContext
 {
-    public PaymentDbContext(DbContextOptions<PaymentDbContext> options) : base(options) { }
+    public PaymentDbContext(DbContextOptions<PaymentDbContext> options)
+        : base(options)
+    {
+    }
 
-    public DbSet<User> Users => Set<User>();   // one DbSet -> one "Users" table
+    public DbSet<User> Users => Set<User>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        // Configure User entity
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Email).IsUnique();
+            entity.Property(e => e.Balance).HasPrecision(18, 2);
+            entity.Property(e => e.Email).HasMaxLength(255);
+            entity.Property(e => e.Name).HasMaxLength(100);
+
+            // Ignore domain events collection (not stored in DB)
+            entity.Ignore(e => e.DomainEvents);
+        });
+    }
 }
 ```
 
-**4. `Services/IAuthService.cs`** — the auth contract (login + tokens arrive in Topic 9):
+**Understanding the syntax:**
+
+| Part | Purpose |
+|------|---------|
+| `DbSet<User> Users` | Maps to the "Users" table |
+| `HasKey(e => e.Id)` | Primary key |
+| `HasIndex(e => e.Email).IsUnique()` | Unique constraint |
+| `HasPrecision(18, 2)` | Decimal precision for money |
+| `Ignore(e => e.DomainEvents)` | Don't try to persist this |
+
+---
+
+## Exercise 5.4 — Create DTOs in Application layer
+
+DTOs (Data Transfer Objects) are records that carry data across boundaries. They're separate from domain entities.
+
+**Task:** Create request/response DTOs.
+
+**Solution**
+
+Create `src/PaymentApp.Application/DTOs/AuthDtos.cs`:
+
+```bash
+mkdir -p src/PaymentApp.Application/DTOs
+```
 
 ```csharp
-using PaymentApp.Models;
+namespace PaymentApp.Application.DTOs;
 
-namespace PaymentApp.Services;
+public record RegisterRequest(string Name, string Email, string Password);
+
+public record UserResponse(int Id, string Name, string Email);
+```
+
+Create `src/PaymentApp.Application/DTOs/PaymentDtos.cs`:
+
+```csharp
+namespace PaymentApp.Application.DTOs;
+
+public record TransferRequest(int PayerUserId, int PayeeUserId, decimal Amount);
+
+public record TransferResponse(string Status, decimal PayerBalance, decimal PayeeBalance);
+```
+
+**Why DTOs separate from entities?**
+
+| Aspect | Entity | DTO |
+|--------|--------|-----|
+| Purpose | Domain logic | Wire format |
+| Contains | Business rules, behavior | Just data |
+| PasswordHash | Yes (hashed) | Never exposed |
+| Naming | PascalCase | Becomes camelCase on wire |
+
+---
+
+## Exercise 5.5 — Create service interfaces
+
+Interfaces define contracts. Services implement them. Controllers depend on the interfaces, not implementations.
+
+**Task:** Create service interfaces in Application layer.
+
+**Solution**
+
+Create `src/PaymentApp.Application/Interfaces/IAuthService.cs`:
+
+```csharp
+using PaymentApp.Application.DTOs;
+using PaymentApp.Domain.Entities;
+
+namespace PaymentApp.Application.Interfaces;
 
 public interface IAuthService
 {
@@ -96,14 +196,44 @@ public interface IAuthService
 }
 ```
 
-**5. `Services/AuthService.cs`** — hash the password, save the user with a $1,000 starting balance:
+Create `src/PaymentApp.Application/Interfaces/IPaymentService.cs`:
+
+```csharp
+namespace PaymentApp.Application.Interfaces;
+
+public interface IPaymentService
+{
+    Task TransferAsync(int payerUserId, int payeeUserId, decimal amount);
+}
+```
+
+---
+
+## Exercise 5.6 — Implement services in Infrastructure
+
+Services implement the interfaces and contain the actual logic.
+
+**Task:** Create `AuthService` and `PaymentService`.
+
+**Solution**
+
+Create `src/PaymentApp.Infrastructure/Services/AuthService.cs`:
+
+```bash
+mkdir -p src/PaymentApp.Infrastructure/Services
+```
 
 ```csharp
 using Microsoft.AspNetCore.Identity;
-using PaymentApp.Data;
-using PaymentApp.Models;
+using Microsoft.EntityFrameworkCore;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Interfaces;
+using PaymentApp.Domain.Constants;
+using PaymentApp.Domain.Entities;
+using PaymentApp.Domain.Exceptions;
+using PaymentApp.Infrastructure.Data;
 
-namespace PaymentApp.Services;
+namespace PaymentApp.Infrastructure.Services;
 
 public class AuthService : IAuthService
 {
@@ -118,295 +248,138 @@ public class AuthService : IAuthService
 
     public async Task<User> RegisterAsync(RegisterRequest request)
     {
+        // Check for duplicate email
+        var exists = await _db.Users.AnyAsync(u => u.Email == request.Email);
+        if (exists)
+            throw new DuplicateEmailException(request.Email);
+
         var user = new User
         {
             Name = request.Name,
             Email = request.Email,
-            Balance = 1000m,          // every new user starts with $1,000 (demo bank)
+            CreatedAt = DateTime.UtcNow
         };
-        user.PasswordHash = _hasher.HashPassword(user, request.Password);  // salted, framework crypto
-        _db.Users.Add(user);          // stage the insert
-        await _db.SaveChangesAsync(); // commit -> EF fills user.Id
+
+        // Hash password (salted, secure)
+        user.PasswordHash = _hasher.HashPassword(user, request.Password);
+
+        // Set initial balance
+        user.SetInitialBalance(PaymentDefaults.InitialBalance);
+
+        _db.Users.Add(user);
+        await _db.SaveChangesAsync();
+
         return user;
     }
 }
 ```
 
-**6. `Services/IPaymentService.cs`** and **`Services/PaymentService.cs`** — transfer moves money between two users' balances. The read-check-modify here is deliberately racy; Topic 7 fixes it:
-
-```csharp
-using PaymentApp.Models;
-
-namespace PaymentApp.Services;
-
-public interface IPaymentService
-{
-    Task TransferAsync(int payerUserId, int payeeUserId, decimal amount);
-}
-```
+Create `src/PaymentApp.Infrastructure/Services/PaymentService.cs`:
 
 ```csharp
 using Microsoft.EntityFrameworkCore;
-using PaymentApp.Data;
+using PaymentApp.Application.Interfaces;
+using PaymentApp.Domain.Exceptions;
+using PaymentApp.Infrastructure.Data;
 
-namespace PaymentApp.Services;
+namespace PaymentApp.Infrastructure.Services;
 
 public class PaymentService : IPaymentService
 {
     private readonly PaymentDbContext _db;
-    public PaymentService(PaymentDbContext db) => _db = db;
+
+    public PaymentService(PaymentDbContext db)
+    {
+        _db = db;
+    }
 
     public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount)
     {
         if (amount <= 0)
-            throw new ArgumentException("Amount must be positive.");
+            throw InvalidTransferException.NegativeAmount(amount);
+
+        if (payerUserId == payeeUserId)
+            throw InvalidTransferException.SameUser();
 
         var payer = await _db.Users.FirstOrDefaultAsync(u => u.Id == payerUserId)
-            ?? throw new KeyNotFoundException($"No user {payerUserId}.");
+            ?? throw new UserNotFoundException(payerUserId);
+
         var payee = await _db.Users.FirstOrDefaultAsync(u => u.Id == payeeUserId)
-            ?? throw new KeyNotFoundException($"No user {payeeUserId}.");
+            ?? throw new UserNotFoundException(payeeUserId);
 
-        if (payer.Balance < amount)
-            throw new InvalidOperationException("Insufficient funds.");
+        // Domain logic handles validation and events
+        payer.Withdraw(amount);
+        payee.Deposit(amount);
 
-        // Read-check-modify on shared money. Looks innocent — Topic 7 shows how it loses money under load.
-        payer.Balance -= amount;
-        payee.Balance += amount;
-        await _db.SaveChangesAsync();   // one commit, both rows (EF change tracking — Topic 6)
+        // One commit, both changes
+        await _db.SaveChangesAsync();
     }
 }
 ```
 
-**7. The controllers** — thin HTTP shells. `Controllers/AuthController.cs`:
+**Key points:**
+- Services use our domain exceptions (not generic ones)
+- `Withdraw()` and `Deposit()` are domain methods that enforce business rules
+- `SaveChangesAsync()` commits both changes in one transaction
+
+---
+
+## Exercise 5.7 — Create controllers
+
+Controllers are thin HTTP shells. They delegate to services.
+
+**Task:** Create `AuthController` and `PaymentController`.
+
+**Solution**
+
+Update `src/PaymentApp.Api/Controllers/` — first remove any placeholder:
+
+```bash
+rm -f src/PaymentApp.Api/Controllers/.gitkeep
+```
+
+Create `src/PaymentApp.Api/Controllers/AuthController.cs`:
 
 ```csharp
 using Microsoft.AspNetCore.Mvc;
-using PaymentApp.Models;
-using PaymentApp.Services;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Interfaces;
 
-namespace PaymentApp.Controllers;
+namespace PaymentApp.Api.Controllers;
 
 [ApiController]
 [Route("v1/auth")]
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
-    public AuthController(IAuthService auth) => _auth = auth;
 
-    [HttpPost("register")]                       // POST /v1/auth/register
+    public AuthController(IAuthService auth)
+    {
+        _auth = auth;
+    }
+
+    [HttpPost("register")]
     public async Task<ActionResult<UserResponse>> Register(RegisterRequest request)
     {
         var user = await _auth.RegisterAsync(request);
-        var response = new UserResponse(user.Id, user.Name, user.Email);  // no hash leaves the building
-        return CreatedAtAction(nameof(Register), new { id = user.Id }, response);  // 201 + Location
+        var response = new UserResponse(user.Id, user.Name, user.Email);
+        return CreatedAtAction(nameof(Register), new { id = user.Id }, response);
     }
 }
 ```
 
-`Controllers/PaymentController.cs` — where Topic 4's catch-by-type earns rent:
+Create `src/PaymentApp.Api/Controllers/PaymentController.cs`:
 
 ```csharp
 using Microsoft.AspNetCore.Mvc;
-using PaymentApp.Models;
-using PaymentApp.Services;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Interfaces;
+using PaymentApp.Domain.Exceptions;
 
-namespace PaymentApp.Controllers;
+namespace PaymentApp.Api.Controllers;
 
 [ApiController]
 [Route("v1/payment")]
-public class PaymentController : ControllerBase
-{
-    private readonly IPaymentService _payments;
-    public PaymentController(IPaymentService payments) => _payments = payments;
-
-    [HttpPost("transfer")]                       // POST /v1/payment/transfer
-    public async Task<ActionResult> Transfer(TransferRequest request)
-    {
-        try
-        {
-            await _payments.TransferAsync(request.PayerUserId, request.PayeeUserId, request.Amount);
-            return Ok(new { status = "completed" });
-        }
-        catch (KeyNotFoundException ex)      { return NotFound(new { error = ex.Message }); }   // unknown user
-        catch (ArgumentException ex)         { return BadRequest(new { error = ex.Message }); }  // bad amount
-        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }  // insufficient funds
-    }
-}
-```
-
-**8. `Program.cs`** — the DI registrations:
-
-```csharp
-using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
-using PaymentApp.Data;
-using PaymentApp.Models;
-using PaymentApp.Services;
-
-var builder = WebApplication.CreateBuilder(args);
-
-builder.Services.AddControllers();
-
-// EF Core against the composed Postgres. (Hardcoded string is deliberate for now —
-// Topic 8 moves it into config and overrides it per environment.)
-builder.Services.AddDbContext<PaymentDbContext>(options =>
-    options.UseNpgsql("Host=localhost;Database=payapp;Username=payapp;Password=devpass"));
-
-// 👇 dependency injection registration: "when asked for IThing, give a Thing."
-builder.Services.AddScoped<IAuthService, AuthService>();
-builder.Services.AddScoped<IPaymentService, PaymentService>();
-builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
-
-var app = builder.Build();
-app.MapControllers();
-app.Run();
-```
-
-**Where does `args` come from?** There's no `Main(string[] args)` in sight — this file uses **top-level statements**, and the compiler makes `args` implicitly available in that scope (it's the process command-line array, the same one a classic `static void Main(string[] args)` receives). `CreateBuilder(args)` forwards it into the config system so command-line flags can **override** configuration:
-
-```bash
-dotnet run --urls http://0.0.0.0:8080 --environment Staging
-# --urls and --environment land in builder.Configuration because args was passed
-```
-
-Pass `CreateBuilder()` with no args and those flags are silently ignored — a real gotcha when a container's `--urls` mysteriously does nothing. (Node/TS anchor: it's `process.argv`, but wired into config instead of read by hand.)
-
-**Then the schema (cookbook now — Topic 6 opens it up) and run:**
-
-```bash
-dotnet tool install --global dotnet-ef    # one-time
-dotnet ef migrations add InitialCreate    # read model classes -> write the "Users" table
-dotnet ef database update                 # apply it to Postgres
-dotnet run                                # note the port — the drills call it PORT
-```
-
-Two checkpoints while typing: after each file, glance at the Problems panel — forget `using PaymentApp.Models;` and you get **CS0246: The type or namespace name 'User' could not be found**; fixing these as you go teaches the namespace system faster than reading about it. And read `AddScoped` aloud as *"when anyone asks for `IPaymentService`, hand them a fresh `PaymentService` per request."*
-
-## Exercise 5.1 — Prove it works
-
-There's no balance endpoint (by design — you removed the temptation to leak it), so you verify money by reading Postgres directly. That's a Topic 6 skill you may as well start now.
-
-1. Register Alice and Bob:
-
-```bash
-curl -i -X POST http://localhost:PORT/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Alice","email":"alice@bank.test","password":"Passw0rd!"}'
-
-curl -X POST http://localhost:PORT/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Bob","email":"bob@bank.test","password":"Passw0rd!"}'
-```
-
-2. Transfer $250 from Alice (user 1) to Bob (user 2), then read both balances from the DB:
-
-```bash
-curl -X POST http://localhost:PORT/v1/payment/transfer \
-  -H "Content-Type: application/json" \
-  -d '{"payerUserId":1,"payeeUserId":2,"amount":250}'
-# {"status":"completed"}
-
-docker compose exec db psql -U payapp -d payapp \
-  -c 'SELECT "Id","Name","Balance" FROM "Users" ORDER BY "Id";'
-#  Id | Name  | Balance
-#  ---+-------+--------
-#   1 | Alice |  750.00
-#   2 | Bob   | 1250.00
-```
-
-3. Break it four ways and note the status of each: transfer to user 999; transfer with a negative amount; transfer more than Alice has; transfer with `"amount":"heaps"`. **Which responses came from *your* code, and which from the platform?**
-4. `Ctrl+C` the app, start it again, re-read the balances. Where does the state actually live?
-
-**Solution**
-
-1. Registration returns **201** with a `Location` header (from `CreatedAtAction`) and the `UserResponse` JSON — note there's no `passwordHash` field, and the JSON is camelCased even though your C# is PascalCase (the web defaults translate for JS clients). (Topic 9 changes this to return a JWT.)
-
-3. The four failures:
-
-| Payload | Status | Came from |
-|---|---|---|
-| payee 999 | **404** `{"error":"No user 999."}` | your `catch (KeyNotFoundException)` |
-| negative amount | **400** `{"error":"Amount must be positive."}` | your `catch (ArgumentException)` |
-| amount > balance | **400** `{"error":"Insufficient funds."}` | your `catch (InvalidOperationException)` |
-| `"amount":"heaps"` | **400** problem-details naming `$.amount` | `[ApiController]` + the deserializer — your code never ran |
-
-The last row is the one to internalize: Topic 4's boundary enforcement rejected the payload before routing reached your action. You wrote zero validation code for it.
-
-4. Balances survive the restart because state lives in **Postgres**, not in any C# object — the service instance that handled the transfer was garbage-collected long ago; only rows remain. That's *why* `AddScoped` is right here: a fresh service per request is fine when the service holds no state of its own.
-
-## Exercise 5.2 — Break the lifetimes: the captive dependency
-
-Concepts claimed "a service's lifetime is bounded by its shortest-lived dependency." Prove the container enforces it:
-
-1. Change `AddScoped<IPaymentService, PaymentService>()` to `AddSingleton<...>` and restart. What happens — and *when* (first request, or earlier)?
-2. Read the error aloud and explain *why* this combination is dangerous enough to refuse outright.
-3. Revert to `AddScoped`. Then, for the interview: one sentence each on a dependency you'd register scoped, transient, and singleton.
-
-**Solution**
-
-1. The app **refuses to start** — no request needed:
-
-```
-System.AggregateException: Some services are not able to be constructed
- ---> InvalidOperationException: Cannot consume scoped service
-      'PaymentApp.Data.PaymentDbContext' from singleton
-      'PaymentApp.Services.IPaymentService'.
-```
-
-The container validates the whole dependency graph at startup (in Development) and rejects the lifetime mismatch before it can hurt anyone. The Node equivalent: nothing stops a module-level singleton from capturing a per-request object — you find out in production, via weirdness.
-
-2. A singleton lives forever; a scoped `DbContext` is one request's database session. If the container allowed the capture, the *first* request's DbContext would secretly become the *app-wide* one: its change-tracker accumulating every entity ever touched (a memory leak with a business model), stale reads served forever, and — because `DbContext` isn't thread-safe — concurrent requests corrupting each other through it (Topic 7 gives you the vocabulary). This failure mode is a **captive dependency**, and "the DI container validates the graph at startup" is the .NET-specific fact worth saying in an interview.
-
-3. Typical answers:
-   - **Scoped:** the EF Core `DbContext` — one unit-of-work per request.
-   - **Transient:** a cheap, stateless helper — a validator or a `FeeCalculator`.
-   - **Singleton:** something stateless/thread-safe shared by everyone — your `PasswordHasher`, an `HttpClient`-based API client (Topic 10's `PaymentClient`), a cache, configuration.
-
-**Talking point:** the classic DI bug family is "long-lived thing holding short-lived state." You've now watched the container refuse it at startup — a story most candidates can't tell.
-
-## Exercise 5.3 — The compiler as your to-do list
-
-Both lookups in `TransferAsync` repeat the same "find user or throw" line. Extract it — and feel nominal typing force every implementation to keep up.
-
-1. Add `Task<User> FindUserAsync(int userId)` to `IPaymentService`. Save `PaymentService` *before* implementing it and read the error.
-2. Implement it, then use it to DRY the two lookups in `TransferAsync`.
-
-**Solution**
-
-1. The moment you add the method to the interface and save: **CS0535: 'PaymentService' does not implement interface member 'IPaymentService.FindUserAsync(int)'**. That error *is* the point — nominal typing means the contract forces every implementation to catch up before the code compiles again (strict TS flags this too, but here it's the language's whole model, not an opt-in).
-
-2. `Services/PaymentService.cs`:
-
-```csharp
-public async Task<User> FindUserAsync(int userId) =>
-    await _db.Users.FirstOrDefaultAsync(u => u.Id == userId)
-        ?? throw new KeyNotFoundException($"No user {userId}.");
-
-public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount)
-{
-    if (amount <= 0) throw new ArgumentException("Amount must be positive.");
-
-    var payer = await FindUserAsync(payerUserId);   // both lookups now one line
-    var payee = await FindUserAsync(payeeUserId);
-
-    if (payer.Balance < amount) throw new InvalidOperationException("Insufficient funds.");
-    payer.Balance -= amount;
-    payee.Balance += amount;
-    await _db.SaveChangesAsync();
-}
-```
-
-Note what you did *not* touch: `Program.cs`. The registration maps the interface to the class once; growing the interface is invisible to the wiring.
-
-## Exercise 5.4 — A second injected dependency
-
-Inject ASP.NET Core's built-in `ILogger<PaymentController>` into the payment controller alongside the service (add a constructor parameter — no registration needed; the platform pre-registers logging). Log a warning whenever a transfer over $10,000 is attempted. Watch it appear in the `dotnet run` console.
-
-What does it tell you that you never registered `ILogger<T>` yourself?
-
-**Solution**
-
-```csharp
 public class PaymentController : ControllerBase
 {
     private readonly IPaymentService _payments;
@@ -419,16 +392,311 @@ public class PaymentController : ControllerBase
     }
 
     [HttpPost("transfer")]
-    public async Task<ActionResult> Transfer(TransferRequest request)
+    public async Task<ActionResult<TransferResponse>> Transfer(TransferRequest request)
     {
         if (request.Amount > 10_000)
-            _logger.LogWarning("Large transfer: user {Payer} -> user {Payee}, amount {Amount}",
+        {
+            _logger.LogWarning(
+                "Large transfer: user {Payer} -> user {Payee}, amount {Amount}",
                 request.PayerUserId, request.PayeeUserId, request.Amount);
-        // ... rest unchanged
+        }
+
+        try
+        {
+            await _payments.TransferAsync(
+                request.PayerUserId,
+                request.PayeeUserId,
+                request.Amount);
+
+            return Ok(new TransferResponse("completed", 0, 0));
+        }
+        catch (UserNotFoundException ex)
+        {
+            return NotFound(new { code = ex.Code, message = ex.Message });
+        }
+        catch (InsufficientBalanceException ex)
+        {
+            return BadRequest(new { code = ex.Code, message = ex.Message });
+        }
+        catch (InvalidTransferException ex)
+        {
+            return BadRequest(new { code = ex.Code, message = ex.Message });
+        }
     }
 }
 ```
 
-(The `{Payer}` placeholders are **structured logging** — named properties, not string interpolation; log aggregators index them. Use this, not `$"..."`, in log calls. In a payment system this exact line is the seed of an AML alert.)
+**Understanding controller patterns:**
 
-**What it tells you:** the platform pre-registers dozens of services (logging, config, `HttpClientFactory`, hosting) in the same container your own services go into. "Batteries included" isn't a list of libraries — it's one container everything shares. You added a constructor parameter and the wiring came from the platform.
+| Pattern | Example |
+|---------|---------|
+| Constructor injection | `AuthController(IAuthService auth)` |
+| Attribute routing | `[Route("v1/auth")]` |
+| Action methods | `[HttpPost("register")]` |
+| Typed exceptions | Catch by type, return appropriate HTTP status |
+| Structured logging | `_logger.LogWarning("...", args)` — not string interpolation |
+
+---
+
+## Exercise 5.8 — Wire up Program.cs
+
+`Program.cs` is where all the DI registration happens.
+
+**Task:** Update Program.cs to wire everything together.
+
+**Solution**
+
+Replace `src/PaymentApp.Api/Program.cs`:
+
+```csharp
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using PaymentApp.Application.Interfaces;
+using PaymentApp.Domain.Entities;
+using PaymentApp.Infrastructure.Data;
+using PaymentApp.Infrastructure.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add controllers
+builder.Services.AddControllers();
+
+// Add OpenAPI (Swagger)
+builder.Services.AddOpenApi();
+
+// Add EF Core with PostgreSQL
+builder.Services.AddDbContext<PaymentDbContext>(options =>
+    options.UseNpgsql("Host=localhost;Database=payapp;Username=payapp;Password=devpass"));
+
+// Register services (Scoped = one instance per HTTP request)
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
+
+// Register password hasher (Singleton = one instance for app lifetime)
+builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
+
+app.UseHttpsRedirection();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+```
+
+**Understanding DI lifetimes:**
+
+| Lifetime | Method | Use For |
+|----------|--------|---------|
+| Scoped | `AddScoped` | Per-request services (DbContext, business services) |
+| Transient | `AddTransient` | Lightweight, stateless helpers |
+| Singleton | `AddSingleton` | Thread-safe, stateless utilities |
+
+---
+
+## Exercise 5.9 — Create and run migrations
+
+EF Core migrations translate your C# models into database schema changes.
+
+**Task:** Create the initial migration and apply it.
+
+**Solution**
+
+Install the EF Core CLI tools (one-time):
+
+```bash
+dotnet tool install --global dotnet-ef
+```
+
+Create the migration (run from solution root):
+
+```bash
+dotnet ef migrations add InitialCreate \
+  --project src/PaymentApp.Infrastructure \
+  --startup-project src/PaymentApp.Api
+```
+
+Apply it to the database:
+
+```bash
+dotnet ef database update \
+  --project src/PaymentApp.Infrastructure \
+  --startup-project src/PaymentApp.Api
+```
+
+Verify the table was created:
+
+```bash
+docker compose exec db psql -U payapp -c '\d "Users"'
+```
+
+You should see the Users table with all columns.
+
+---
+
+## Exercise 5.10 — Test the API
+
+**Task:** Register users and test transfers.
+
+**Solution**
+
+Run the API:
+
+```bash
+dotnet run --project src/PaymentApp.Api
+```
+
+Note the port (usually 5000 or 5001). In another terminal:
+
+```bash
+# Register Alice
+curl -i -X POST http://localhost:5000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice","email":"alice@bank.test","password":"Passw0rd!"}'
+
+# Register Bob
+curl -X POST http://localhost:5000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Bob","email":"bob@bank.test","password":"Passw0rd!"}'
+
+# Transfer $250 from Alice (1) to Bob (2)
+curl -X POST http://localhost:5000/v1/payment/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"payerUserId":1,"payeeUserId":2,"amount":250}'
+
+# Check balances directly in database
+docker compose exec db psql -U payapp -d payapp \
+  -c 'SELECT "Id", "Name", "Balance" FROM "Users" ORDER BY "Id";'
+```
+
+Expected output:
+
+```
+ Id | Name  | Balance
+----+-------+---------
+  1 | Alice |  750.00
+  2 | Bob   | 1250.00
+```
+
+---
+
+## Exercise 5.11 — Test error cases
+
+**Task:** Verify our domain exceptions work correctly.
+
+**Solution**
+
+```bash
+# Transfer to non-existent user -> 404
+curl -X POST http://localhost:5000/v1/payment/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"payerUserId":1,"payeeUserId":999,"amount":100}'
+# {"code":"USER_NOT_FOUND","message":"User with ID 999 was not found"}
+
+# Negative amount -> 400
+curl -X POST http://localhost:5000/v1/payment/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"payerUserId":1,"payeeUserId":2,"amount":-100}'
+# {"code":"INVALID_TRANSFER","message":"Transfer amount must be positive..."}
+
+# Overdraw -> 400
+curl -X POST http://localhost:5000/v1/payment/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"payerUserId":1,"payeeUserId":2,"amount":10000}'
+# {"code":"INSUFFICIENT_BALANCE","message":"Cannot withdraw..."}
+
+# Duplicate email -> handled by unique constraint
+curl -X POST http://localhost:5000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice2","email":"alice@bank.test","password":"Passw0rd!"}'
+# {"code":"DUPLICATE_EMAIL","message":"A user with email 'alice@bank.test' already exists"}
+
+# Invalid JSON -> 400 from framework (not our code)
+curl -X POST http://localhost:5000/v1/payment/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"payerUserId":1,"amount":"heaps"}'
+# Returns ProblemDetails with validation errors
+```
+
+---
+
+## What we built
+
+| Layer | Files Added |
+|-------|-------------|
+| **Infrastructure** | `Data/PaymentDbContext.cs`, `Services/AuthService.cs`, `Services/PaymentService.cs` |
+| **Application** | `DTOs/AuthDtos.cs`, `DTOs/PaymentDtos.cs`, `Interfaces/IAuthService.cs`, `Interfaces/IPaymentService.cs` |
+| **Api** | `Controllers/AuthController.cs`, `Controllers/PaymentController.cs`, `Program.cs` (updated) |
+
+**Full project structure:**
+
+```
+PaymentApp/
+├── docker-compose.yml
+├── PaymentApp.sln
+└── src/
+    ├── PaymentApp.Domain/
+    │   ├── Common/
+    │   ├── Constants/
+    │   ├── Entities/
+    │   ├── Events/
+    │   ├── Exceptions/
+    │   ├── Utilities/
+    │   └── ValueObjects/
+    ├── PaymentApp.Application/
+    │   ├── DTOs/
+    │   │   ├── AuthDtos.cs
+    │   │   └── PaymentDtos.cs
+    │   └── Interfaces/
+    │       ├── IAuthService.cs
+    │       └── IPaymentService.cs
+    ├── PaymentApp.Infrastructure/
+    │   ├── Data/
+    │   │   └── PaymentDbContext.cs
+    │   ├── Migrations/
+    │   │   └── (generated)
+    │   └── Services/
+    │       ├── AuthService.cs
+    │       └── PaymentService.cs
+    └── PaymentApp.Api/
+        ├── Controllers/
+        │   ├── AuthController.cs
+        │   └── PaymentController.cs
+        └── Program.cs
+```
+
+---
+
+## Key concepts
+
+| Concept | What it means |
+|---------|---------------|
+| **DI Container** | Manages object creation and lifetimes |
+| **Scoped** | One instance per HTTP request |
+| **Singleton** | One instance for app lifetime |
+| **DbContext** | Unit of work + change tracker |
+| **Migration** | C# code that changes DB schema |
+| **Controller** | Thin HTTP shell, delegates to services |
+| **Interface** | Contract that allows swapping implementations |
+
+---
+
+## Interview talking points
+
+- "The DI container validates the dependency graph at startup. A singleton can't depend on a scoped service — the container refuses to start."
+- "DbContext is scoped because each request needs its own unit of work. A singleton DbContext would share state across requests and isn't thread-safe."
+- "Controllers depend on interfaces, not implementations. That's what makes services testable — you can inject fakes."
+- "Domain exceptions carry business context. The controller catches by type and maps to HTTP status codes."
+- "EF Core reads my model classes at runtime (reflection) to build the schema. No schema file needed."
+
+---
+
+## Next: Topic 6
+
+In Topic 6, we dive deep into EF Core: change tracking, how LINQ becomes SQL, and transactions.

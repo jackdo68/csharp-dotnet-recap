@@ -1,138 +1,562 @@
 # Topic 4: Hands On
 
-Create a console app `PaymentErrors` (`dotnet new console -n PaymentErrors`). You'll need `using System.Text.Json;` for 4.2. Try each exercise before reading its solution.
+> **The PaymentApp build:** Solution structure → Domain models → Runtime utilities → **Exceptions** → Web API + EF Core → EF Core deep dive → Transfer endpoint → Document upload → Authentication → Production
 
-## Exercise 4.1 — Parse vs TryParse
+In this hands-on, you'll add domain exceptions to PaymentApp. These typed exceptions will make error handling clear and consistent throughout the application.
 
-1. Call `int.Parse("300k")` with no try/catch and run it. Read the output: what exception type, and does the stack trace point at the parse site or somewhere downstream?
-2. Wrap it in a try/catch that catches **only** `FormatException` and prints a friendly message.
-3. Rewrite with `int.TryParse` and no try/catch at all. When would you choose each? (Think: user-typed form input vs a value that should always be valid.)
+**Prerequisites:** Complete Topic 3 hands-on.
+
+---
+
+## Exercise 4.1 — Create the base domain exception
+
+All domain exceptions should inherit from a common base. This lets us catch "any domain error" when needed.
+
+**Task:** Create a base `DomainException` class.
 
 **Solution**
 
-```csharp
-// 1. Unhandled:
-var n = int.Parse("300k");
-// Unhandled exception. System.FormatException: The input string '300k' was not in a correct format.
-//    at System.Number.ThrowFormatException[TChar](...)
-//    at Program.<Main>$(String[] args) in .../Program.cs:line 2
-// The trace points AT THE PARSE SITE — the cause, not a downstream symptom.
+Create the folder and base exception:
 
-// 2. Catch only FormatException:
-try { var amount = int.Parse("300k"); }
-catch (FormatException) { Console.WriteLine("That's not a number — try again."); }
-
-// 3. Try-pattern:
-if (int.TryParse("300k", out var amount2))
-    Console.WriteLine($"Got {amount2}");
-else
-    Console.WriteLine("Not a number — no exception, no try/catch.");
+```bash
+mkdir -p src/PaymentApp.Domain/Exceptions
 ```
 
-**When to choose:** user-typed input *failing is expected* → `TryParse`. A config value or DB column that should always be numeric *failing is exceptional* → `Parse`, and let the exception surface loudly. Contrast with TS: `parseInt("300k")` returns `300` (!) and `parseInt("abc")` returns `NaN` — both typed as `number`, both silent.
-
-## Exercise 4.2 — The boundary enforcer (this is the big one)
-
-You receive transfer JSON from an "API". Define `record TransferRequest(string To, decimal Amount);` — a DTO shape like the one Topic 5's `/v1/payment/transfer` endpoint binds.
-
-1. Deserialize a **valid** payload: `{"To":"Bob","Amount":300}` and print the result.
-2. Deserialize a **wrong-shaped** payload: `{"To":"Bob","Amount":"lots"}`. What exception, and what does its message tell you about *where* the mismatch is?
-3. Now write out what your TS service would have done with the same two payloads and `as TransferRequest` — at what point would you have discovered the problem, and in which file?
-4. Bonus: deserialize `{"to":"bob","amount":1}` (lowercase keys). What happens, and which `JsonSerializerOptions` setting explains web-API behaviour?
-
-**Solution**
+Create `src/PaymentApp.Domain/Exceptions/DomainException.cs`:
 
 ```csharp
-using System.Text.Json;
+namespace PaymentApp.Domain.Exceptions;
 
-record TransferRequest(string To, decimal Amount);
-
-// 1. Valid — works:
-var good = JsonSerializer.Deserialize<TransferRequest>(
-    """{"To":"Bob","Amount":300}""");
-Console.WriteLine($"{good!.To}: {good.Amount}");
-
-// 2. Wrong shape:
-var bad = JsonSerializer.Deserialize<TransferRequest>(
-    """{"To":"Bob","Amount":"lots"}""");
-// System.Text.Json.JsonException:
-//   The JSON value could not be converted to System.Decimal.
-//   Path: $.Amount | LineNumber: 0 | BytePositionInLine: 26.
-```
-
-The exception names the **property** (`$.Amount`), the expected type, and the position — at the boundary, before the bad data touches your code. (The `"""..."""` is a *raw string literal* — no escaping quotes, like backticks without interpolation.)
-
-**3. The TS version:** `const transfer = await res.json() as TransferRequest` succeeds for both payloads. The bad one gives you `transfer.Amount === "lots"` — a string wearing a `decimal`'s badge. You discover it later: maybe `transfer.Amount * 1.01` → `NaN` in a fee calculation three modules away, maybe a corrupt DB row next week. The file in the stack trace is the *victim*, not the culprit. This is precisely the gap Zod fills — and here the deserializer just *is* Zod.
-
-**4. Case sensitivity:** with default options the lowercase keys don't match, and (for a positional record) deserialization fails — or with a plain class you'd get defaults. ASP.NET Core's web defaults set `PropertyNameCaseInsensitive = true` (and emit camelCase), which is why controllers happily accept `{"to": ...}` from JS clients. Worth knowing the friendliness lives in *options*, not the language.
-
-## Exercise 4.3 — Soft vs throwing lookups
-
-Build `var transfers = new List<TransferRequest>();` (empty) and `var byId = new Dictionary<int, TransferRequest>();` (empty).
-
-1. Trigger the throwing version of each lookup: `transfers.First()` and `byId[42]`. Note both exception types.
-2. Rewrite both with the soft versions (`FirstOrDefault`, `TryGetValue`) and handle the miss.
-3. One sentence: which behaviour is the TS default, and what do you have to opt into in each language to get the other?
-
-**Solution**
-
-```csharp
-// 1. Throwing versions:
-transfers.First();   // InvalidOperationException: Sequence contains no elements
-byId[42];            // KeyNotFoundException: The given key '42' was not present.
-
-// 2. Soft versions:
-var first = transfers.FirstOrDefault();
-if (first is null) Console.WriteLine("No transfers yet");
-
-if (byId.TryGetValue(42, out var found))
-    Console.WriteLine(found.To);
-else
-    Console.WriteLine("No transfer #42");
-```
-
-**3.** TS defaults to soft (`.find()` → `undefined`, `map["k"]` → `undefined`) and you opt into throwing by hand (`?? throw`, assertion functions). C# offers both but the *plain-looking* spelling (`First()`, `dict[k]`) throws — you opt into softness explicitly (`...OrDefault`, `Try...`). Each language's default reveals its philosophy.
-
-## Exercise 4.4 — Catch by type
-
-Write a method `ProcessPayload(string json)` that deserializes a `TransferRequest` and then validates `Amount > 0` (throw `ArgumentException` if not). Call it with three payloads — valid, malformed JSON, negative amount — and route each failure to a **different** catch block by exception type, no `if`/`instanceof` inside.
-
-**Solution**
-
-```csharp
-using System.Text.Json;
-
-void ProcessPayload(string json)
+/// <summary>
+/// Base class for all domain exceptions.
+/// Domain exceptions represent business rule violations.
+/// </summary>
+public abstract class DomainException : Exception
 {
-    var transfer = JsonSerializer.Deserialize<TransferRequest>(json)
-                   ?? throw new ArgumentException("Payload was null");
-    if (transfer.Amount <= 0)
-        throw new ArgumentException($"Amount must be positive, got {transfer.Amount}");
-    Console.WriteLine($"OK: {transfer.To} / {transfer.Amount}");
+    public string Code { get; }
+
+    protected DomainException(string code, string message)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    protected DomainException(string code, string message, Exception innerException)
+        : base(message, innerException)
+    {
+        Code = code;
+    }
+}
+```
+
+**Understanding the syntax:**
+
+| Syntax | What it means |
+|--------|---------------|
+| `: Exception` | Inherits from the base Exception class |
+| `abstract class` | Cannot be instantiated directly |
+| `: base(message)` | Calls the parent constructor |
+| `Code` property | Machine-readable error code for API responses |
+
+**Why a Code property?**
+
+HTTP responses need machine-readable error codes, not just human messages:
+```json
+{
+  "code": "INSUFFICIENT_BALANCE",
+  "message": "Cannot transfer $500 with balance of $100"
+}
+```
+
+---
+
+## Exercise 4.2 — Create specific domain exceptions
+
+Let's create exceptions for specific business rule violations.
+
+**Task:** Create exceptions for:
+- User not found
+- Insufficient balance
+- Invalid transfer amount
+- Duplicate email
+
+**Solution**
+
+Create `src/PaymentApp.Domain/Exceptions/UserNotFoundException.cs`:
+
+```csharp
+namespace PaymentApp.Domain.Exceptions;
+
+public class UserNotFoundException : DomainException
+{
+    public int UserId { get; }
+
+    public UserNotFoundException(int userId)
+        : base("USER_NOT_FOUND", $"User with ID {userId} was not found")
+    {
+        UserId = userId;
+    }
+
+    public UserNotFoundException(string email)
+        : base("USER_NOT_FOUND", $"User with email '{email}' was not found")
+    {
+    }
+}
+```
+
+Create `src/PaymentApp.Domain/Exceptions/InsufficientBalanceException.cs`:
+
+```csharp
+namespace PaymentApp.Domain.Exceptions;
+
+public class InsufficientBalanceException : DomainException
+{
+    public decimal CurrentBalance { get; }
+    public decimal RequestedAmount { get; }
+
+    public InsufficientBalanceException(decimal currentBalance, decimal requestedAmount)
+        : base(
+            "INSUFFICIENT_BALANCE",
+            $"Cannot withdraw {requestedAmount:C} with balance of {currentBalance:C}")
+    {
+        CurrentBalance = currentBalance;
+        RequestedAmount = requestedAmount;
+    }
+}
+```
+
+Create `src/PaymentApp.Domain/Exceptions/InvalidTransferException.cs`:
+
+```csharp
+namespace PaymentApp.Domain.Exceptions;
+
+public class InvalidTransferException : DomainException
+{
+    public InvalidTransferException(string reason)
+        : base("INVALID_TRANSFER", reason)
+    {
+    }
+
+    public static InvalidTransferException NegativeAmount(decimal amount)
+        => new($"Transfer amount must be positive, got {amount:C}");
+
+    public static InvalidTransferException ZeroAmount()
+        => new("Transfer amount cannot be zero");
+
+    public static InvalidTransferException SameUser()
+        => new("Cannot transfer to yourself");
+}
+```
+
+Create `src/PaymentApp.Domain/Exceptions/DuplicateEmailException.cs`:
+
+```csharp
+namespace PaymentApp.Domain.Exceptions;
+
+public class DuplicateEmailException : DomainException
+{
+    public string Email { get; }
+
+    public DuplicateEmailException(string email)
+        : base("DUPLICATE_EMAIL", $"A user with email '{email}' already exists")
+    {
+        Email = email;
+    }
+}
+```
+
+**Understanding the patterns:**
+
+| Pattern | Example | Purpose |
+|---------|---------|---------|
+| Rich exception | `InsufficientBalanceException` with `CurrentBalance` property | Carry context for logging/display |
+| Static factory | `InvalidTransferException.NegativeAmount()` | Readable creation + consistent messages |
+| Constructor overloads | `UserNotFoundException(int)` vs `UserNotFoundException(string)` | Different lookup methods |
+
+---
+
+## Exercise 4.3 — Add validation to User entity
+
+Let's add a method to the User entity that validates and performs a transfer, raising domain events and throwing exceptions as needed.
+
+**Task:** Add `Withdraw` and `Deposit` methods to User.
+
+**Solution**
+
+Update `src/PaymentApp.Domain/Entities/User.cs`:
+
+```csharp
+using PaymentApp.Domain.Events;
+using PaymentApp.Domain.Exceptions;
+
+namespace PaymentApp.Domain.Entities;
+
+public class User : BaseEntity
+{
+    public string Name { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string PasswordHash { get; set; } = string.Empty;
+    public decimal Balance { get; private set; }
+    public string? DocumentPath { get; set; }
+
+    /// <summary>
+    /// Withdraws money from this user's balance.
+    /// </summary>
+    /// <exception cref="InsufficientBalanceException">
+    /// Thrown when balance is insufficient.
+    /// </exception>
+    public void Withdraw(decimal amount)
+    {
+        if (amount <= 0)
+            throw InvalidTransferException.NegativeAmount(amount);
+
+        if (Balance < amount)
+            throw new InsufficientBalanceException(Balance, amount);
+
+        var oldBalance = Balance;
+        Balance -= amount;
+
+        AddDomainEvent(new UserBalanceChanged(Id, oldBalance, Balance));
+    }
+
+    /// <summary>
+    /// Deposits money into this user's balance.
+    /// </summary>
+    public void Deposit(decimal amount)
+    {
+        if (amount <= 0)
+            throw InvalidTransferException.NegativeAmount(amount);
+
+        var oldBalance = Balance;
+        Balance += amount;
+
+        AddDomainEvent(new UserBalanceChanged(Id, oldBalance, Balance));
+    }
+
+    /// <summary>
+    /// Sets the initial balance (for account creation).
+    /// </summary>
+    public void SetInitialBalance(decimal amount)
+    {
+        if (amount < 0)
+            throw new ArgumentException("Initial balance cannot be negative", nameof(amount));
+
+        Balance = amount;
+    }
+}
+```
+
+**Key changes:**
+
+| Change | Why |
+|--------|-----|
+| `Balance { get; private set; }` | Only the entity controls balance changes |
+| `Withdraw()` throws `InsufficientBalanceException` | Business rule enforced at domain level |
+| Raises `UserBalanceChanged` event | Other parts of the system can react |
+
+---
+
+## Exercise 4.4 — Add a Result type (optional pattern)
+
+For operations where failure is expected and normal (not exceptional), we can use a Result type instead of exceptions.
+
+**Task:** Create a simple Result type.
+
+**Solution**
+
+Create `src/PaymentApp.Domain/Common/Result.cs`:
+
+```bash
+mkdir -p src/PaymentApp.Domain/Common
+```
+
+```csharp
+namespace PaymentApp.Domain.Common;
+
+/// <summary>
+/// Represents the result of an operation that can succeed or fail.
+/// Use for expected failures (validation). Use exceptions for exceptional failures.
+/// </summary>
+public class Result
+{
+    public bool IsSuccess { get; }
+    public bool IsFailure => !IsSuccess;
+    public string? Error { get; }
+
+    protected Result(bool isSuccess, string? error)
+    {
+        IsSuccess = isSuccess;
+        Error = error;
+    }
+
+    public static Result Success() => new(true, null);
+    public static Result Failure(string error) => new(false, error);
+
+    public static Result<T> Success<T>(T value) => new(value, true, null);
+    public static Result<T> Failure<T>(string error) => new(default!, false, error);
 }
 
-string[] payloads =
-[
-    """{"To":"Bob","Amount":300}""",
-    """{not json at all}""",
-    """{"To":"Bob","Amount":-5}""",       // Mallory tries a negative transfer to pull money
-];
+/// <summary>
+/// Result with a value on success.
+/// </summary>
+public class Result<T> : Result
+{
+    public T Value { get; }
 
-foreach (var p in payloads)
+    internal Result(T value, bool isSuccess, string? error)
+        : base(isSuccess, error)
+    {
+        Value = value;
+    }
+
+    public static implicit operator Result<T>(T value) => Success(value);
+}
+```
+
+**When to use Result vs Exception:**
+
+| Situation | Use |
+|-----------|-----|
+| User input validation | Result (failure is expected) |
+| Business rule violation | Exception (violation is exceptional) |
+| External service failure | Exception (with retry logic) |
+| Parse might fail | TryParse pattern |
+
+**Example usage:**
+
+```csharp
+// Result pattern
+public Result<User> ValidateRegistration(string email, string password)
+{
+    if (string.IsNullOrEmpty(email))
+        return Result.Failure<User>("Email is required");
+
+    if (password.Length < 8)
+        return Result.Failure<User>("Password must be at least 8 characters");
+
+    // ... create user
+    return user;  // implicit conversion to Result<User>
+}
+
+// vs Exception pattern
+public void Register(string email, string password)
+{
+    // These throw if violated - exceptional case
+    ArgumentException.ThrowIfNullOrEmpty(email);
+
+    var user = new User { Email = email };
+    // ...
+}
+```
+
+---
+
+## Exercise 4.5 — Test exception behavior
+
+**Task:** Create a temporary test to verify exceptions work correctly.
+
+**Solution**
+
+Create `test-exceptions.cs`:
+
+```csharp
+#!/usr/bin/env dotnet
+#r "src/PaymentApp.Domain/bin/Debug/net10.0/PaymentApp.Domain.dll"
+
+using PaymentApp.Domain.Entities;
+using PaymentApp.Domain.Exceptions;
+using PaymentApp.Domain.Constants;
+
+// Create a user with initial balance
+var alice = new User
+{
+    Id = 1,
+    Name = "Alice",
+    Email = PaymentDefaults.TestUsers.AliceEmail
+};
+alice.SetInitialBalance(PaymentDefaults.InitialBalance);
+
+Console.WriteLine($"Alice's balance: {alice.Balance:C}");
+
+// Successful withdrawal
+alice.Withdraw(250m);
+Console.WriteLine($"After withdrawing $250: {alice.Balance:C}");
+
+// Check domain events
+Console.WriteLine($"\nDomain events raised: {alice.DomainEvents.Count}");
+foreach (var evt in alice.DomainEvents)
+{
+    Console.WriteLine($"  - {evt.GetType().Name}");
+}
+
+// Try to overdraw
+Console.WriteLine("\nAttempting to withdraw $1000...");
+try
+{
+    alice.Withdraw(1000m);
+}
+catch (InsufficientBalanceException ex)
+{
+    Console.WriteLine($"Caught: {ex.Code}");
+    Console.WriteLine($"Message: {ex.Message}");
+    Console.WriteLine($"Balance was: {ex.CurrentBalance:C}");
+    Console.WriteLine($"Requested: {ex.RequestedAmount:C}");
+}
+
+// Try negative amount
+Console.WriteLine("\nAttempting to withdraw -$50...");
+try
+{
+    alice.Withdraw(-50m);
+}
+catch (InvalidTransferException ex)
+{
+    Console.WriteLine($"Caught: {ex.Code}");
+    Console.WriteLine($"Message: {ex.Message}");
+}
+
+// Multiple catch blocks by type
+Console.WriteLine("\nDemonstrating catch by type:");
+void TryOperation(Action operation, string description)
 {
     try
     {
-        ProcessPayload(p);
+        operation();
+        Console.WriteLine($"  {description}: Success");
     }
-    catch (JsonException ex)          // malformed / mis-shaped payload
+    catch (InsufficientBalanceException)
     {
-        Console.WriteLine($"Rejected at the boundary: {ex.Message}");
+        Console.WriteLine($"  {description}: Insufficient balance");
     }
-    catch (ArgumentException ex)      // valid shape, invalid business data
+    catch (InvalidTransferException)
     {
-        Console.WriteLine($"Validation failed: {ex.Message}");
+        Console.WriteLine($"  {description}: Invalid transfer");
+    }
+    catch (DomainException ex)
+    {
+        Console.WriteLine($"  {description}: Domain error - {ex.Code}");
     }
 }
+
+TryOperation(() => alice.Withdraw(10m), "Withdraw $10");
+TryOperation(() => alice.Withdraw(10000m), "Withdraw $10000");
+TryOperation(() => alice.Withdraw(0m), "Withdraw $0");
 ```
 
-The runtime routes each failure to the right block by exception type — no `instanceof` ladder. In a real API (Topic 5) this same layering appears as: deserialization errors → automatic 400 from `[ApiController]`, business validation → your code's 4xx, unexpected exceptions → 500 from middleware.
+Build and run:
+
+```bash
+dotnet build src/PaymentApp.Domain
+dotnet run test-exceptions.cs
+```
+
+Expected output:
+
+```
+Alice's balance: $1,000.00
+After withdrawing $250: $750.00
+
+Domain events raised: 1
+  - UserBalanceChanged
+
+Attempting to withdraw $1000...
+Caught: INSUFFICIENT_BALANCE
+Message: Cannot withdraw $1,000.00 with balance of $750.00
+Balance was: $750.00
+Requested: $1,000.00
+
+Attempting to withdraw -$50...
+Caught: INVALID_TRANSFER
+Message: Transfer amount must be positive, got -$50.00
+
+Demonstrating catch by type:
+  Withdraw $10: Success
+  Withdraw $10000: Insufficient balance
+  Withdraw $0: Invalid transfer
+```
+
+**Clean up:**
+
+```bash
+rm test-exceptions.cs
+```
+
+---
+
+## Exercise 4.6 — Build and verify
+
+**Task:** Build the solution and verify everything compiles.
+
+**Solution**
+
+```bash
+dotnet build
+```
+
+---
+
+## What we built
+
+| File | Purpose |
+|------|---------|
+| `Exceptions/DomainException.cs` | Base exception with Code property |
+| `Exceptions/UserNotFoundException.cs` | User lookup failures |
+| `Exceptions/InsufficientBalanceException.cs` | Overdraft attempts |
+| `Exceptions/InvalidTransferException.cs` | Bad transfer parameters |
+| `Exceptions/DuplicateEmailException.cs` | Registration conflicts |
+| `Common/Result.cs` | Result type for expected failures |
+| Updated `User.cs` | Withdraw/Deposit with validation |
+
+**Domain project structure:**
+
+```
+src/PaymentApp.Domain/
+├── Common/
+│   └── Result.cs
+├── Constants/
+│   └── PaymentDefaults.cs
+├── Entities/
+│   ├── BaseEntity.cs
+│   └── User.cs (updated)
+├── Events/
+│   ├── IDomainEvent.cs
+│   └── UserEvents.cs
+├── Exceptions/
+│   ├── DomainException.cs
+│   ├── DuplicateEmailException.cs
+│   ├── InsufficientBalanceException.cs
+│   ├── InvalidTransferException.cs
+│   └── UserNotFoundException.cs
+├── Utilities/
+│   └── EntityDescriptor.cs
+└── ValueObjects/
+    └── Money.cs
+```
+
+---
+
+## Key differences: C# vs TypeScript
+
+| Aspect | C# | TypeScript |
+|--------|-----|------------|
+| **Exception types** | Catch by type, no instanceof | Must use instanceof checks |
+| **Runtime enforcement** | JSON deserializer throws on mismatch | `as` casts are trust-based |
+| **Parse failures** | `FormatException` at parse site | `NaN` drifts downstream |
+| **Dictionary miss** | `KeyNotFoundException` | `undefined` |
+| **TryParse pattern** | `out` parameter | No equivalent (return tuple) |
+
+---
+
+## Interview talking points
+
+- "Domain exceptions carry business context — `InsufficientBalanceException` knows the current balance and requested amount."
+- "We catch exceptions by type, not with instanceof checks. The runtime routes to the right catch block."
+- "The Code property gives machine-readable error codes for API responses."
+- "Expected failures use the Result pattern or TryParse; exceptional failures throw."
+- "Domain logic enforces business rules at the entity level — Withdraw() can't overdraw, guaranteed."
+
+---
+
+## Next: Topic 5
+
+In Topic 5, we build the Web API layer: controllers, DI registration, and EF Core database connection. The domain exceptions we created will translate to HTTP error responses.

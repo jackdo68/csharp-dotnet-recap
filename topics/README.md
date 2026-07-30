@@ -1,12 +1,12 @@
-# Guide — how this recap works
+# Guide — how this course works
 
-A C#/.NET recap for an experienced **Node.js + TypeScript** developer. Goal: hold your own in .NET codebases and interviews within 2–3 days.
+A comprehensive C#/.NET guide for an experienced **Node.js + TypeScript** developer. This isn't a quick recap — it's a detailed, easy-to-follow journey through .NET, breaking down complex concepts into digestible pieces while using TypeScript as your mental anchor.
 
 **The premise:**
 - TypeScript and C# were designed by the same person (Anders Hejlsberg)
 - ~70% of concepts are shared: types, generics, interfaces, `async/await`, arrow functions
 - You're not learning new ideas — just new syntax, a different runtime, and a few different philosophies
-- This course skips what maps 1:1 and drills the **fundamental differences**
+- This course goes deep on the **fundamental differences** that matter in production
 
 ## The misunderstanding to clear first
 
@@ -29,7 +29,7 @@ If you've felt the pain that motivated JS → TS (runtime surprises, `this` bind
 
 ## The five big differences
 
-Everything in this course hangs off five differences. Burn these in — they're the organizing story, and each one is where a topic lives:
+Everything in this course hangs off five differences. Burn these in — they're the organizing story:
 
 | # | Difference | It's about | Covered in |
 |---|---|---|---|
@@ -39,59 +39,58 @@ Everything in this course hangs off five differences. Burn these in — they're 
 | 4 | **Typed exceptions**, not sentinels | failure philosophy | Topic 4 |
 | 5 | **Batteries included + DI**, not assemble-it-yourself | ecosystem philosophy | Topics 5–6, 8–10 |
 
-**Topic map:**
-- **Topic 1** = vocabulary before all of them
-- **Topic 8** = where #2 and #5 prove out in Docker (the "when Node, when .NET" answer)
-- **Topics 9–10** = #5's final laps: auth, middleware, validation, outbound HTTP, background work
+## The PaymentApp — one continuous build
 
-## The practice loop
+Everything ties to **one running example**: the **PaymentApp**. You start building it in Topic 1 and finish with a production-ready containerized API in Topic 10. Don't skip ahead — each topic starts where the previous ended.
 
-Each topic has two pages with **different jobs**:
+| Topic | Focus | What You Build |
+|-------|-------|----------------|
+| **1** | Platform & Tooling | Solution structure (4 projects: Domain, Application, Infrastructure, Api) |
+| **2** | Language & Type System | Domain models: `User` entity, `Money` value object |
+| **3** | Runtime Types | Base entity classes, reflection utilities |
+| **4** | Errors & Exceptions | Domain exceptions, Result pattern |
+| **5** | Web API + DI + EF Core | Controllers, DI wiring, Postgres, migrations, register endpoint |
+| **6** | EF Core Deep Dive | Change tracking internals, advanced queries, transactions |
+| **7** | Concurrency & Threading | Transfer endpoint with proper locking |
+| **8** | .NET Standard Library | Document upload (File, Stream, JSON, HttpClient) |
+| **9** | Authentication | Login, JWT, `[Authorize]`, ownership checks |
+| **10** | Production | Docker, health checks, configuration |
+| **11** | Testing | Unit, integration, functional tests |
+| **12** | Advanced Patterns | *Concepts only* — CQRS, MediatR, domain events |
+
+**Project structure** (Clean Architecture from Topic 1):
+```
+PaymentApp/
+├── PaymentApp.Domain/           # Entities, value objects, domain exceptions
+├── PaymentApp.Application/      # Use cases, interfaces, DTOs
+├── PaymentApp.Infrastructure/   # EF Core DbContext, external services
+└── PaymentApp.Api/              # Controllers, DI wiring, Program.cs
+```
+
+**The User table:** Id, Name, Email, PasswordHash, Balance (`decimal`), DocumentPath.
+
+**Four endpoints:**
+- `POST /v1/auth/register` — create user (Topic 5)
+- `POST /v1/auth/login` — return JWT (Topic 9)
+- `POST /v1/payment/transfer` — move money between users (Topic 7)
+- `POST /v1/document/upload` — upload a document file (Topic 8)
+
+**Requirements:**
+- **.NET 10 SDK** — install from [dotnet.microsoft.com](https://dotnet.microsoft.com/download)
+- **Docker Desktop** (or any docker daemon) from Topic 5 onward
+- **Don't copy-paste** — type the code. Muscle memory of `{ get; set; }` and `:` for inheritance is half the value.
+
+## Page structure
+
+Each topic has two pages:
 
 | Page | Purpose |
 |------|---------|
-| **Concepts** | Theory + the build itself. Code introduced line by line. **Type the code as you go.** |
-| **Hands On** | Drills that prove, break, and stress what Concepts built. Solution + interview point after each. |
+| **Concepts** | Theory, explanation, Node/TS comparison. Essential code snippets only. |
+| **Hands On** | Full working code. Build the app step by step. Solutions with explanations. |
 
-**Concepts** = what the concept is, when to use it, and real usage in the app.
-**Hands On** = produce the race, read the compiler error, watch 401 become 403. Try before reading solution.
-
-### The PaymentApp
-
-Everything ties to **one running example**. Don't skip ahead — each topic starts where the previous ended.
-
-**Topics 1–4:** Console programs in the payment domain (`Money`, `User`, `Transfer`) — foreshadowing Topic 5's types.
-
-**Topics 5–10:** One continuous build of the **Payment API**:
-
-| Topic | Adds |
-|-------|------|
-| 5 | API straight onto Postgres (docker-compose). One `User` table. |
-| 6 | Unpacks EF Core (DbContext, migrations) + adds tests |
-| 7 | CPU-bound document upload. Races the transfer, loses money, fixes it |
-| 8 | Containerizes and ships (api + db in compose) |
-| 9 | Login, JWT, `[Authorize]`, ownership checks |
-| 10 | Middleware, validation, `PaymentClient` calling Node processor, background auditor |
-
-**The User table:** name, email, hashed password, `decimal` balance, uploaded-document filename.
-
-**Four endpoints:** `/v1/auth/register`, `/v1/auth/login`, `/v1/payment/transfer`, `/v1/document/upload`
-
-**Requirements:**
-- **Docker Desktop** (or any docker daemon) from Topic 6 onward
-- **Don't copy-paste** — type the code. Muscle memory of `{ get; set; }` and `:` for inheritance is half the value.
-
-## The 2–3 day plan
-
-| Day | Topics | Focus |
-|-----|--------|-------|
-| 1 | 1–4 | Tooling, language, runtime types, errors. All console apps. |
-| 2 | 5–6 | Web API with DI on Postgres. EF Core unpacked + tests. **"Real .NET developer" day.** |
-| 3 | 7–8 | Threading (biggest difference). Ship it: Docker, compose, when-Node-when-.NET. |
-| 4 (optional) | 9–10 | Auth (JWT, `[Authorize]`, ownership). Pipeline (middleware, validation, `PaymentClient`). |
-
-**Finish:** Re-read the five differences table. Say each one out loud with an example. That's your interview prep.
+**Exception:** Topic 12 (Advanced Patterns) is concepts-only — diagrams and philosophy, no code changes to PaymentApp.
 
 ## Saying it in an interview
 
-> "My deepest hands-on work is Node/TypeScript, but the concepts map cleanly — same designer, same async/await model, LINQ mirrors map/filter/reduce. The real differences I've drilled are the runtime — real threads, types that survive compilation — and the ecosystem philosophy: DI everywhere, batteries included. I ramp fast because I'm strong on the fundamentals underneath the language."
+> "I'm a Node/TypeScript developer who's gone deep on .NET. The concepts map cleanly — same designer, same async/await model, LINQ mirrors map/filter/reduce. The real differences I've internalized are the runtime — real threads, types that survive compilation — and the ecosystem philosophy: DI everywhere, batteries included. I've built a full Clean Architecture API from scratch, so I understand both the patterns and the practical trade-offs."

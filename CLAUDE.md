@@ -4,12 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-A C#/.NET course site for an experienced **Node.js + TypeScript developer** (the repo owner). It deliberately does **not** cover all of C# — it covers the fundamental differences between C#/.NET and Node+TS, organized around "the five big differences" (see `topics/README.md`).
+A comprehensive C#/.NET learning guide for an experienced **Node.js + TypeScript developer** (the repo owner). The guide is detailed, easy to follow, and strips away jargon — breaking down complex concepts into small, digestible explanations. It uses TypeScript comparisons as mental anchors while going deep into .NET mechanics.
 
-The whole course ties to **one** running example, the **PaymentApp** — this is not a broad C#/.NET crash course; it is an experienced Node/TS developer learning the *nuances* of C#/.NET, so every concept must land on a practical PaymentApp example (the concept, when to use it, and its real-world usage).
+The whole course ties to **one** running example, the **PaymentApp** — built incrementally from Topic 1 through Topic 10. Every hands-on section contributes to the same application. There is no throwaway code: we build things once, correctly.
 
-- **Topics 1–4**: language/runtime fundamentals via small console programs, all in the **payment domain** (`Money`, `User`, `Transfer`, `TransferRequest`) — every example foreshadows the exact types Topic 5's `PaymentApp` builds. No unrelated example domains.
-- **Topics 5–10**: one continuous build of a **Payment API** (`PaymentApp`) — register, login, transfer, document upload; a **single `User` table** (balance on the user, no `Account`) in Postgres **from day one** (Topic 5 builds the service once, directly against EF/Postgres — there is deliberately no throwaway in-memory phase; Topic 6 unpacks EF and adds tests); a CPU-bound `/v1/document/upload` endpoint anchors Topic 7's threading (and persists the file); JWT auth (register+login return tokens) with the payer-is-caller ownership check in Topic 9; and in Topic 10 an external Node/Express **payment processor** (provided ready-made — the reader never writes it), reached through a `PaymentClient` `HttpClient` wrapper, that becomes the single writer of money via atomic conditional SQL. Final compose: db + processor + api. Each topic's Hands On starts exactly where the previous topic ended.
+**Topics 1–10**: One continuous build of the **PaymentApp**, starting with project setup and ending with a production-ready containerized API:
+
+| Topic | Focus | PaymentApp Adds |
+|-------|-------|-----------------|
+| 1 | Platform & Tooling | Solution structure (Clean Architecture: Domain, Application, Infrastructure, Api) |
+| 2 | Language & Type System | Domain models (`User` entity, `Money` value object) |
+| 3 | Runtime Types | Reflection utilities, base entity classes |
+| 4 | Errors & Exceptions | Domain exceptions, Result pattern |
+| 5 | Web API + DI + EF Core | Controllers, DI wiring, Postgres, migrations, register endpoint |
+| 6 | EF Core Deep Dive | Change tracking internals, advanced queries, transactions |
+| 7 | Concurrency & Threading | Transfer endpoint with proper locking from day one |
+| 8 | .NET Standard Library | Document upload (File, Stream, JSON, HttpClient) |
+| 9 | Authentication | Login, JWT, `[Authorize]`, ownership checks |
+| 10 | Production | Docker, health checks, configuration |
+
+**Topics 11–12**: Deep dives that stand alone:
+
+| Topic | Focus | Hands-on |
+|-------|-------|----------|
+| 11 | Testing | Unit, integration, functional tests for PaymentApp |
+| 12 | Advanced Patterns | **Concepts only** — CQRS, MediatR, domain events (diagrams + philosophy, no code) |
 
 This is **docs only** — the repo contains no runnable application code, just the course markdown and the Astro site that renders it. It deploys to GitHub Pages via CI and is not run locally.
 
@@ -36,9 +55,9 @@ A topic is a folder `topics/topic-N-<slug>/` containing exactly `concepts.md` an
 1. `site/astro.config.mjs` — the sidebar group (`label` + `autogenerate.directory`)
 2. `site/src/content/docs/index.mdx` — the topic's `<LinkCard>`
 
-Also keep in sync when the 5–10 arc changes:
+Also keep in sync:
 
-- The **build-line banner** (blockquote at the top of each `hands-on.md` for Topics 5–10: "**The PaymentApp build:** …") — one chain, bolded segment per page. Every page's banner must list all ten-arc segments with the current topic bolded.
+- The **build-line banner** (blockquote at the top of each `hands-on.md` for Topics 1–10: "**The PaymentApp build:** …") — one chain, bolded segment per page. Every page's banner must list all segments with the current topic bolded.
 - Topic cross-references inside Concepts pages ("Topic 3", "Topic 7") are plain text — grep for the topic number when renumbering.
 
 ## Content conventions (the important part)
@@ -68,21 +87,41 @@ Every topic hangs off one of the five differences tabled in `topics/README.md` (
 The two pages have **different jobs**, and content must respect the split:
 
 - **`concepts.md` — theory, explanation, and the Node/TS comparison.** This is where a concept is *explained*: what it is, the mechanism below the syntax, when to use it, and how it compares to Node/TypeScript. It **may** carry code — but only **essential/illustrative snippets** that make the point (a `Models.cs` shape, the signature of `AuthController`, the one line that matters), not the whole app built line-by-line. Starts with `# Topic N: <name>`, then "The one question this topic answers" as a blockquote, then the concepts (comparison tables, short annotated snippets), ends with **Interview talking points**. Every concept ties to the PaymentApp.
-- **`hands-on.md` — the full solution the topic covers.** The complete, copy-pasteable code for the topic's machinery lives here: whole files (`Models.cs`, `AuthController.cs`, `AuthService.cs`, `Program.cs` wiring) plus the drills that prove, break, and stress it (produce the race, read the exact compiler error, watch the 401 become a 403). Titled `# Topic N: Hands On`; Topics 5–10 open with the build-line banner blockquote. Numbered `Exercise N.M` sections: the task first, then a `**Solution**` block with full working code, expected output/errors, and the explanation + interview talking point it was secretly teaching. The reader builds the app *from Hands On*.
+- **`hands-on.md` — the full solution the topic covers.** The complete, copy-pasteable code for the topic's machinery lives here: whole files (`Models.cs`, `AuthController.cs`, `AuthService.cs`, `Program.cs` wiring) plus the drills that prove, break, and stress it. Titled `# Topic N: Hands On`; Topics 1–10 open with the build-line banner blockquote. Numbered `Exercise N.M` sections: the task first, then a `**Solution**` block with full working code, expected output/errors, and the explanation + interview talking point it was secretly teaching. The reader builds the app *from Hands On*.
+- **Topics without hands-on (e.g., Topic 12):** Some topics are concepts-only — they explain advanced patterns with diagrams and philosophy but don't modify PaymentApp. These topics have `concepts.md` only, no `hands-on.md`.
 
 Code style in examples: money is always `decimal`, async methods end in `Async`, private fields `_camelCase`, comparisons presented as both bullets and a table when substantial.
 
-### The Payment domain (Topics 5–10)
+### The PaymentApp (Topics 1–10)
 
-`PaymentApp` has **one DB model**: `User` (Id, Name, Email, Password [hashed], Balance [decimal], File [string — the filename of an uploaded `.txt`, stored on disk]). **There is no `Account` table** — balance lives on `User`; **there is no get-balance endpoint**. Users Alice/Bob/Cara with `*@bank.test` emails and password `Passw0rd!`; every new user starts with a **$1,000** balance.
+**Project structure** (Clean Architecture from Topic 1):
+```
+PaymentApp/
+├── PaymentApp.Domain/           # Entities, value objects, domain exceptions
+├── PaymentApp.Application/      # Use cases, interfaces, DTOs
+├── PaymentApp.Infrastructure/   # EF Core DbContext, external services
+└── PaymentApp.Api/              # Controllers, DI wiring, Program.cs
+```
 
-Four endpoints across **three controllers**, backed by **three services** and **one client**:
-- **`AuthController`** → `AuthService`: `POST /v1/auth/register` (hash password, save user, **return a JWT** — token issuance arrives in Topic 9; Topic 5's register just creates the user) and `POST /v1/auth/login` (return a JWT).
-- **`PaymentController`** → `PaymentService`: `POST /v1/payment/transfer` (private; body `payerUserId`, `payeeUserId`, `amount`; from Topic 9 the payer is the authenticated caller).
-- **`DocumentController`** → `DocumentService`: `POST /v1/document/upload` (private; accepts a `.txt` file, stores it on disk, saves the filename in `User.File`) — introduced in Topic 7 as the CPU-bound threading anchor.
-- **`PaymentClient`** — a thin wrapper over `HttpClient` (via `IHttpClientFactory`) for the external Node/Express **processor** (port 4000), which owns `/v1/withdraw` + `/v1/deposit` and is the only writer of balances from Topic 10 on.
+**One DB model**: `User` (Id, Name, Email, PasswordHash, Balance [decimal], DocumentPath [string]). **No `Account` table** — balance lives on `User`. Users Alice/Bob/Cara with `*@bank.test` emails and password `Passw0rd!`; every new user starts with **$1,000** balance.
 
-Postgres credentials `payapp`/`devpass`. The concurrency arc is load-bearing and staged: transfer is deliberately racy until Topic 7 (static `SemaphoreSlim` on `User.Balance`), which Topic 10 replaces with per-user ordered locks + the processor's atomic `UPDATE` — don't "fix" an earlier topic with a later topic's tool. The auth arc is staged too: Topic 5 register just creates the user (password hashed); Topic 9 adds login, JWT issuance (register+login both return tokens), `[Authorize]`, and the payer-is-caller ownership check on transfer/document. Don't introduce unrelated example domains.
+**Four endpoints** across **three controllers**:
+- **`AuthController`** → `IAuthService`: `POST /v1/auth/register` (Topic 5) and `POST /v1/auth/login` (Topic 9, returns JWT).
+- **`PaymentController`** → `IPaymentService`: `POST /v1/payment/transfer` (Topic 7, with proper locking from day one).
+- **`DocumentController`** → `IDocumentService`: `POST /v1/document/upload` (Topic 8, demonstrates File/Stream APIs).
+
+**Build-once philosophy**: We don't introduce broken code to fix later. Transfer is built with proper concurrency handling in Topic 7. Auth is wired correctly in Topic 9. Each topic adds new functionality without rewriting previous work.
+
+Postgres credentials `payapp`/`devpass`. Don't introduce unrelated example domains.
+
+### Reference repositories
+
+Two production-grade repos inform the advanced patterns discussed in Topic 12:
+
+- **eShop** (`/Users/jackdo/source-code/eShop`) — Microsoft's reference microservices app. Demonstrates MediatR pipeline, domain events, outbox pattern, Minimal APIs.
+- **CleanArchitectureTemplate** (`/Users/jackdo/source-code/CleanArchitectureTemplate`) — Jason Taylor's Clean Architecture template. Demonstrates CQRS, FluentValidation, pipeline behaviors, domain events.
+
+These repos are **reference only** — PaymentApp intentionally stays simpler. Topic 12 explains these patterns conceptually with diagrams, pointing to these repos for real-world examples.
 
 ### Accuracy notes
 

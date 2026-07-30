@@ -1,399 +1,854 @@
 # Topic 7: Hands On
 
-> **The PaymentApp build:** Topic 5 the API, straight onto Postgres → Topic 6 EF unpacked + tests → **Topic 7 (you are here): a CPU-bound `/v1/document/upload`, then produce the transfer race in the real API — and fix it** → Topic 8 Docker & ship → Topic 9 register, login, lock down → Topic 10 the pipeline & the payment processor.
+> **The PaymentApp build:** Solution structure → Domain models → Runtime utilities → Exceptions → Web API + EF Core → EF Core deep dive → **Transfer endpoint + Document upload** → .NET Standard Library → Authentication → Production
 
-Build the document feature (7.0), drill the threading mechanics on it (7.1–7.4), then rob your own bank on `TransferAsync` (7.5). Try each exercise before reading its solution.
+Topic 6 explored EF Core internals. This topic adds the transfer endpoint (with proper concurrency from the start) and a CPU-bound document upload feature.
 
-## Exercise 7.0 — Build the document feature
+**Prerequisites:** Complete Topic 6 hands-on (working PaymentApp API with PostgreSQL).
 
-Add the CPU-bound `.txt` upload to `PaymentApp`. Full code:
+---
 
-**`Services/DocumentService.cs`** — a pure-CPU `Scan` plus the I/O that persists the file:
+## Exercise 7.1 — Add the transfer endpoint with proper locking
+
+Money transfers have a classic race condition: read-modify-write without coordination. We'll implement it correctly from the start using `SemaphoreSlim`.
+
+**Task:** Add transfer functionality to PaymentApp.
+
+**Solution**
+
+**Step 1:** Add DTOs for transfer in `src/PaymentApp.Application/DTOs/TransferDtos.cs`:
+
+```csharp
+namespace PaymentApp.Application.DTOs;
+
+public record TransferRequest(int PayerUserId, int PayeeUserId, decimal Amount);
+
+public record TransferResponse(
+    int PayerUserId,
+    decimal PayerNewBalance,
+    int PayeeUserId,
+    decimal PayeeNewBalance,
+    DateTime TransferredAt);
+```
+
+**Step 2:** Add the transfer service interface in `src/PaymentApp.Application/Services/ITransferService.cs`:
+
+```csharp
+using PaymentApp.Application.DTOs;
+
+namespace PaymentApp.Application.Services;
+
+public interface ITransferService
+{
+    Task<TransferResponse> TransferAsync(TransferRequest request);
+}
+```
+
+**Step 3:** Implement the service with `SemaphoreSlim` in `src/PaymentApp.Infrastructure/Services/TransferService.cs`:
+
+```csharp
+using Microsoft.EntityFrameworkCore;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Services;
+using PaymentApp.Domain.Exceptions;
+using PaymentApp.Infrastructure.Data;
+
+namespace PaymentApp.Infrastructure.Services;
+
+public class TransferService : ITransferService
+{
+    private readonly PaymentDbContext _db;
+
+    // Static semaphore: one gate for all instances (service is scoped)
+    // SemaphoreSlim(1, 1) = mutex — only one transfer at a time
+    private static readonly SemaphoreSlim _transferGate = new(1, 1);
+
+    public TransferService(PaymentDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task<TransferResponse> TransferAsync(TransferRequest request)
+    {
+        // Validation before acquiring the lock
+        if (request.Amount <= 0)
+            throw InvalidTransferException.NegativeAmount(request.Amount);
+
+        if (request.PayerUserId == request.PayeeUserId)
+            throw InvalidTransferException.SameUser();
+
+        // Acquire the semaphore — only one transfer executes at a time
+        await _transferGate.WaitAsync();
+        try
+        {
+            // Now safe: no other transfer can read-modify-write concurrently
+            var payer = await _db.Users.FirstOrDefaultAsync(u => u.Id == request.PayerUserId)
+                ?? throw new UserNotFoundException(request.PayerUserId);
+
+            var payee = await _db.Users.FirstOrDefaultAsync(u => u.Id == request.PayeeUserId)
+                ?? throw new UserNotFoundException(request.PayeeUserId);
+
+            // Domain method throws InsufficientBalanceException if needed
+            payer.Withdraw(request.Amount);
+            payee.Deposit(request.Amount);
+
+            await _db.SaveChangesAsync();
+
+            return new TransferResponse(
+                payer.Id,
+                payer.Balance,
+                payee.Id,
+                payee.Balance,
+                DateTime.UtcNow);
+        }
+        finally
+        {
+            // ALWAYS release in finally — even if an exception is thrown
+            _transferGate.Release();
+        }
+    }
+}
+```
+
+**Understanding the code:**
+
+| Element | Why |
+|---------|-----|
+| `static SemaphoreSlim` | Service is scoped (new instance per request). Instance field would mean each request has its own gate → no protection. |
+| `SemaphoreSlim(1, 1)` | Mutex — only 1 thread at a time. First `1` = initial count, second `1` = max count. |
+| `await _transferGate.WaitAsync()` | Async wait — doesn't block the thread while waiting. |
+| `try`/`finally` with `Release()` | Ensures the semaphore is released even if an exception occurs. |
+| Validation before lock | Don't hold the lock while doing things that don't need protection. |
+
+**Why not `lock`?** The critical section contains `await` statements. `lock` can't contain `await` — compiler error CS1996. `SemaphoreSlim` allows async critical sections.
+
+**Why `static`?** The service is registered as `Scoped`, meaning each request gets a new instance. If the semaphore were an instance field, each request would have its own gate, providing no protection.
+
+**Step 4:** Add the controller in `src/PaymentApp.Api/Controllers/PaymentController.cs`:
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Services;
+using PaymentApp.Domain.Exceptions;
+
+namespace PaymentApp.Api.Controllers;
+
+[ApiController]
+[Route("v1/payment")]
+public class PaymentController : ControllerBase
+{
+    private readonly ITransferService _transferService;
+
+    public PaymentController(ITransferService transferService)
+    {
+        _transferService = transferService;
+    }
+
+    [HttpPost("transfer")]
+    public async Task<ActionResult<TransferResponse>> Transfer(TransferRequest request)
+    {
+        try
+        {
+            var result = await _transferService.TransferAsync(request);
+            return Ok(result);
+        }
+        catch (UserNotFoundException ex)
+        {
+            return NotFound(new { code = ex.Code, message = ex.Message });
+        }
+        catch (InsufficientBalanceException ex)
+        {
+            return BadRequest(new { code = ex.Code, message = ex.Message });
+        }
+        catch (InvalidTransferException ex)
+        {
+            return BadRequest(new { code = ex.Code, message = ex.Message });
+        }
+    }
+}
+```
+
+**Step 5:** Register the service in `src/PaymentApp.Api/Program.cs`:
+
+```csharp
+builder.Services.AddScoped<ITransferService, TransferService>();
+```
+
+**Step 6:** Test the transfer:
+
+```bash
+# Build and run
+dotnet build && dotnet run --project src/PaymentApp.Api
+
+# Transfer $100 from Alice (ID 1) to Bob (ID 2)
+curl -X POST http://localhost:5000/v1/payment/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"payerUserId":1,"payeeUserId":2,"amount":100}'
+
+# Expected response:
+# {"payerUserId":1,"payerNewBalance":900.00,"payeeUserId":2,"payeeNewBalance":1100.00,"transferredAt":"..."}
+
+# Verify in database
+docker compose exec db psql -U payapp -d payapp \
+  -c 'SELECT "Id", "Name", "Balance" FROM "Users";'
+```
+
+---
+
+## Exercise 7.2 — Add document upload (CPU-bound work)
+
+The document upload feature demonstrates proper handling of CPU-bound work. The scan operation is CPU-intensive (hashing, text analysis), so we use `Task.Run` to move it off the request thread.
+
+**Task:** Add document upload functionality.
+
+**Solution**
+
+**Step 1:** Create a DTO for the scan result in `src/PaymentApp.Application/DTOs/DocumentDtos.cs`:
+
+```csharp
+namespace PaymentApp.Application.DTOs;
+
+public record ScanResult(string FileName, int Words, string Sha256, bool Flagged);
+```
+
+**Step 2:** Add the interface in `src/PaymentApp.Application/Services/IDocumentService.cs`:
+
+```csharp
+using PaymentApp.Application.DTOs;
+
+namespace PaymentApp.Application.Services;
+
+public interface IDocumentService
+{
+    /// <summary>
+    /// CPU-bound: hash and scan the document content.
+    /// Call this with Task.Run to avoid blocking the request thread.
+    /// </summary>
+    ScanResult Scan(string fileName, byte[] content);
+
+    /// <summary>
+    /// I/O-bound: store the document on disk and update the user.
+    /// </summary>
+    Task StoreAsync(int userId, string fileName, byte[] content);
+}
+```
+
+**Step 3:** Implement the service in `src/PaymentApp.Infrastructure/Services/DocumentService.cs`:
 
 ```csharp
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using PaymentApp.Data;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Services;
+using PaymentApp.Domain.Exceptions;
+using PaymentApp.Infrastructure.Data;
 
-namespace PaymentApp.Services;
+namespace PaymentApp.Infrastructure.Services;
 
-public record ScanResult(string FileName, int Words, string Sha256, bool Flagged);
-
-public class DocumentService
+public class DocumentService : IDocumentService
 {
     private readonly PaymentDbContext _db;
-    private readonly string _dir = Path.Combine(AppContext.BaseDirectory, "uploads");
+    private readonly string _uploadDir;
 
     public DocumentService(PaymentDbContext db)
     {
         _db = db;
-        Directory.CreateDirectory(_dir);
+        _uploadDir = Path.Combine(AppContext.BaseDirectory, "uploads");
+        Directory.CreateDirectory(_uploadDir);
     }
 
-    // CPU-BOUND: hash + scan the text. No awaits — this burns a core.
+    // CPU-BOUND: No awaits — this method burns CPU cycles
+    // The caller should use Task.Run to move this off the request thread
     public ScanResult Scan(string fileName, byte[] content)
     {
+        // Hash the content (CPU-intensive)
         var hash = Convert.ToHexString(SHA256.HashData(content));
+
+        // Parse as text
         var text = Encoding.UTF8.GetString(content);
 
-        double signal = 0;                                   // pretend malware/OCR scan — real CPU cost
-        for (int i = 0; i < 5_000_000; i++) signal += Math.Sqrt(i);
+        // Simulate CPU-heavy work (malware scan, OCR, etc.)
+        // In production, this might be ML inference, image processing, etc.
+        double signal = 0;
+        for (int i = 0; i < 5_000_000; i++)
+            signal += Math.Sqrt(i);
 
+        // Analyze the text
         var words = text.Split(default(char[]?), StringSplitOptions.RemoveEmptyEntries).Length;
         var flagged = text.Contains("fraud", StringComparison.OrdinalIgnoreCase);
+
         return new ScanResult(fileName, words, hash, flagged);
     }
 
-    // I/O-BOUND: store the .txt on disk and record its name on the user.
-    public async Task StoreAsync(int userId, byte[] content)
+    // I/O-BOUND: Uses await — call normally with await
+    public async Task StoreAsync(int userId, string fileName, byte[] content)
     {
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId)
-            ?? throw new KeyNotFoundException($"No user {userId}.");
+            ?? throw new UserNotFoundException(userId);
 
-        var stored = $"{userId}_{Guid.NewGuid():N}.txt";
-        await File.WriteAllBytesAsync(Path.Combine(_dir, stored), content);   // System.IO.File
-        user.File = stored;                                                   // the User.File column
+        // Generate a unique filename
+        var storedName = $"{userId}_{Guid.NewGuid():N}{Path.GetExtension(fileName)}";
+        var filePath = Path.Combine(_uploadDir, storedName);
+
+        // Write to disk (I/O)
+        await File.WriteAllBytesAsync(filePath, content);
+
+        // Update user record
+        user.DocumentPath = storedName;
         await _db.SaveChangesAsync();
     }
 }
 ```
 
-**`Controllers/DocumentController.cs`**:
+**Step 4:** Add the controller in `src/PaymentApp.Api/Controllers/DocumentController.cs`:
 
 ```csharp
 using Microsoft.AspNetCore.Mvc;
-using PaymentApp.Services;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Services;
+using PaymentApp.Domain.Exceptions;
 
-namespace PaymentApp.Controllers;
+namespace PaymentApp.Api.Controllers;
 
 [ApiController]
 [Route("v1/document")]
 public class DocumentController : ControllerBase
 {
-    private readonly DocumentService _documents;
-    public DocumentController(DocumentService documents) => _documents = documents;
+    private readonly IDocumentService _documentService;
 
-    [HttpPost("upload")]                              // POST /v1/document/upload  (multipart/form-data)
+    public DocumentController(IDocumentService documentService)
+    {
+        _documentService = documentService;
+    }
+
+    [HttpPost("upload")]
     public async Task<ActionResult<ScanResult>> Upload(int userId, IFormFile file)
     {
-        if (Path.GetExtension(file.FileName).ToLowerInvariant() != ".txt")
+        // Validate file type
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (ext != ".txt")
             return BadRequest(new { error = "Only .txt files are accepted." });
 
+        // I/O: read the uploaded bytes
         using var ms = new MemoryStream();
-        await file.CopyToAsync(ms);                                     // I/O: bytes off the wire
+        await file.CopyToAsync(ms);
         var bytes = ms.ToArray();
 
-        var result = await Task.Run(() => _documents.Scan(file.FileName, bytes));  // CPU on a pool thread
-        try { await _documents.StoreAsync(userId, bytes); }                        // I/O: disk + User.File
-        catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
+        // CPU: scan the document on a pool thread
+        // Task.Run moves CPU-bound work off the request thread
+        var result = await Task.Run(() => _documentService.Scan(file.FileName, bytes));
+
+        // I/O: store on disk and update user
+        try
+        {
+            await _documentService.StoreAsync(userId, file.FileName, bytes);
+        }
+        catch (UserNotFoundException ex)
+        {
+            return NotFound(new { code = ex.Code, message = ex.Message });
+        }
+
         return Ok(result);
     }
 }
 ```
 
-Register it in `Program.cs` — **scoped**, because it holds the scoped `DbContext`: `builder.Services.AddScoped<DocumentService>();`. Then upload a file (Topic 9 makes this private and takes `userId` from the token):
+**Understanding the code:**
 
-```bash
-printf 'alice statement: no fraud here' > kyc.txt
-curl -X POST "http://localhost:PORT/v1/document/upload?userId=1" -F "file=@kyc.txt"
-# {"fileName":"kyc.txt","words":5,"sha256":"...","flagged":true}
-docker compose exec db psql -U payapp -d payapp -c 'SELECT "Id","File" FROM "Users" WHERE "Id"=1;'
-#  Id |            File
-#  ---+---------------------------------
-#   1 | 1_9af3....txt   ← filename saved; the bytes are on disk under uploads/
+| Line | Type | Tool | Why |
+|------|------|------|-----|
+| `await file.CopyToAsync(ms)` | I/O | `await` | Reading from network — thread returns to pool while waiting |
+| `await Task.Run(() => _documentService.Scan(...))` | CPU | `Task.Run` | Hashing and analysis — moves to pool thread so request thread can serve other requests |
+| `await _documentService.StoreAsync(...)` | I/O | `await` | Writing to disk and database — thread returns to pool |
+
+**Step 5:** Register the service in `Program.cs`:
+
+```csharp
+builder.Services.AddScoped<IDocumentService, DocumentService>();
 ```
 
-(`flagged` is `true` because the text contains "fraud". A non-`.txt` upload returns **400**; `userId=999` returns **404**.)
+**Step 6:** Test the upload:
 
-## Exercise 7.1 — See the scan race
+```bash
+# Create a test file
+echo "This is a test document with some text content." > test.txt
 
-**Goal:** Watch `count++` lose increments under `Parallel.For`.
+# Upload for user 1 (Alice)
+curl -X POST "http://localhost:5000/v1/document/upload?userId=1" \
+  -F "file=@test.txt"
 
-**Steps:**
-1. Create 500 synthetic `.txt` documents
-2. Use `Parallel.For` with plain `count++` inside
-3. Run 10 times, print each count
+# Expected response:
+# {"fileName":"test.txt","words":9,"sha256":"...","flagged":false}
+
+# Try with flagged content
+echo "This document mentions fraud and suspicious activity." > flagged.txt
+curl -X POST "http://localhost:5000/v1/document/upload?userId=1" \
+  -F "file=@flagged.txt"
+
+# Expected response:
+# {"fileName":"flagged.txt","words":7,"sha256":"...","flagged":true}
+
+# Verify in database
+docker compose exec db psql -U payapp -d payapp \
+  -c 'SELECT "Id", "Name", "DocumentPath" FROM "Users" WHERE "Id" = 1;'
+
+# Clean up
+rm test.txt flagged.txt
+```
+
+---
+
+## Exercise 7.3 — Understand the race condition (drill)
+
+Before moving on, let's actually see the race condition that the semaphore prevents. This drill uses a standalone script to demonstrate the problem.
+
+**Task:** Create a script that shows what happens without locking.
 
 **Solution**
 
+Create `test-race.cs`:
+
 ```csharp
-using System.Text;
-using PaymentApp.Services;
+#!/usr/bin/env dotnet
 
-var scanner = new DocumentService(db);          // Scan doesn't touch the db
-var docs = Enumerable.Range(1, 500)
-    .Select(i => (Name: $"doc{i}.txt", Bytes: Encoding.UTF8.GetBytes($"user {i} statement clean")))
-    .ToList();
+// Simulate the transfer race condition WITHOUT locking
 
-for (int run = 1; run <= 10; run++)
+int aliceBalance = 1000;
+int bobBalance = 1000;
+
+Console.WriteLine($"Before: Alice={aliceBalance}, Bob={bobBalance}, Total={aliceBalance + bobBalance}");
+
+// Fire 50 concurrent "transfers" of $10 each
+var tasks = Enumerable.Range(1, 50).Select(i => Task.Run(() =>
 {
-    int processed = 0;
-    Parallel.For(0, docs.Count, i =>
-    {
-        scanner.Scan(docs[i].Name, docs[i].Bytes);
-        processed++;                     // ❌ UNSAFE — read-modify-write across threads
-    });
-    Console.WriteLine($"Run {run}: {processed} / 500");
-}
+    // This is the RACE: read-modify-write without coordination
+    var current = aliceBalance;           // READ
+    Thread.Sleep(1);                       // Simulate work (increases race window)
+    aliceBalance = current - 10;           // WRITE (based on stale read)
+    bobBalance += 10;                      // Also racy
+})).ToArray();
+
+Task.WaitAll(tasks);
+
+Console.WriteLine($"After:  Alice={aliceBalance}, Bob={bobBalance}, Total={aliceBalance + bobBalance}");
+Console.WriteLine($"Expected: Alice=500, Bob=1500, Total=2000");
+
+// If total != 2000, money was created or destroyed
+if (aliceBalance + bobBalance != 2000)
+    Console.WriteLine("❌ RACE CONDITION: Money was created or destroyed!");
+else
+    Console.WriteLine("✅ (Got lucky this time - try running again)");
 ```
 
-**Expected output:**
-```
-Run 1: 500 / 500
-Run 2: 498 / 500   ← lost 2
-Run 3: 500 / 500
-Run 4: 497 / 500   ← lost 3
-...
+Run it several times:
+
+```bash
+dotnet run test-race.cs
+dotnet run test-race.cs
+dotnet run test-race.cs
 ```
 
-Mostly 500, but occasional smaller numbers — different each run. That flakiness *is* the race.
+**Expected output (varies each run):**
 
-**Why it happens:**
+```
+Before: Alice=1000, Bob=1000, Total=2000
+After:  Alice=870, Bob=1210, Total=2080
+Expected: Alice=500, Bob=1500, Total=2000
+❌ RACE CONDITION: Money was created or destroyed!
+```
+
+Sometimes it might show `Total=2000` (got lucky), but run it enough times and you'll see the race.
+
+**Why this happens:**
 
 | Step | Thread A | Thread B |
 |------|----------|----------|
-| 1 | Read `processed` = 40 | Read `processed` = 40 |
-| 2 | Compute 40 + 1 = 41 | Compute 40 + 1 = 41 |
-| 3 | Write 41 | Write 41 |
-| Result | **One increment lost** | |
+| 1 | Read `aliceBalance` = 900 | Read `aliceBalance` = 900 |
+| 2 | Compute 900 - 10 = 890 | Compute 900 - 10 = 890 |
+| 3 | Write 890 | Write 890 |
+| Result | **One debit lost** | Total is now wrong |
 
-`count++` = read + add + write (3 operations). Two threads can interleave → lost update. Same bug as `UPDATE SET n = n + 1` without locking.
+**Clean up:**
 
-## Exercise 7.2 — Thread-safe totals (and why `decimal` is different)
+```bash
+rm test-race.cs
+```
 
-**Goal:** Learn that `Interlocked` doesn't work for `decimal` — you need `lock`.
+---
 
-**Steps:**
-1. Extend 7.1 to also track:
-   - `totalWords` (long)
-   - `totalScore` (decimal) = `words * 0.5m`
-2. Try `Interlocked.Add(ref totalScore, score)` — read the compiler error
-3. Fix with `lock`, run 5 times, confirm identical results
+## Exercise 7.4 — Watch `await` hop threads
+
+A key difference from Node: after `await`, you might be on a different thread. This is why `lock` can't contain `await`.
+
+**Task:** Create a script that shows thread hopping.
 
 **Solution**
 
-**Step 2 — the error:**
-```
-CS1503: cannot convert 'ref decimal' to 'ref int' (or 'ref long')
-```
-
-`Interlocked` only works on types the CPU can swap atomically (32/64 bits). `decimal` is 128 bits → no atomic op → **must use `lock`**.
-
-**Step 3 — the fix:**
+Create `test-thread-hop.cs`:
 
 ```csharp
-int processed = 0;
-long totalWords = 0;
-decimal totalScore = 0m;
-var gate = new object();
+#!/usr/bin/env dotnet
 
-Parallel.For(0, docs.Count, i =>
+async Task CheckAsync(int id)
 {
-    var r = scanner.Scan(docs[i].Name, docs[i].Bytes);
-    Interlocked.Increment(ref processed);           // int: atomic op
-    Interlocked.Add(ref totalWords, r.Words);       // long: atomic op
-    lock (gate) { totalScore += r.Words * 0.5m; }   // decimal: lock required
-});
-Console.WriteLine($"{processed} docs, {totalWords} words, score {totalScore}");
-```
-
-Same numbers every run. Use the **cheapest sufficient tool**:
-
-| Type | Tool | Why |
-|------|------|-----|
-| `int`, `long` | `Interlocked` | CPU can swap in one instruction |
-| `decimal` | `lock` | 128 bits, no atomic op exists |
-
-**Key insight:** This is why `TransferAsync` (7.5) can't use `Interlocked` — money is `decimal`.
-
-## Exercise 7.3 — Watch await hop threads
-
-**Goal:** See that code after `await` can run on a *different* thread.
-
-**Steps:**
-1. Write `async Task CheckSanctionsAsync(int id)` that logs thread ID before and after `await Task.Delay(200)`
-2. Fire 20 of them with `Task.WhenAll`
-3. Compare before/after thread IDs
-
-**Solution**
-
-```csharp
-async Task CheckSanctionsAsync(int id)
-{
-    Console.WriteLine($"check {id} BEFORE await on thread {Environment.CurrentManagedThreadId}");
-    await Task.Delay(200);
-    Console.WriteLine($"check {id} AFTER  await on thread {Environment.CurrentManagedThreadId}");
+    Console.WriteLine($"[{id}] BEFORE await: thread {Environment.CurrentManagedThreadId}");
+    await Task.Delay(100);
+    Console.WriteLine($"[{id}] AFTER  await: thread {Environment.CurrentManagedThreadId}");
 }
 
-await Task.WhenAll(Enumerable.Range(1, 20).Select(CheckSanctionsAsync));
+Console.WriteLine("Starting 10 async operations...\n");
+
+await Task.WhenAll(Enumerable.Range(1, 10).Select(CheckAsync));
+
+Console.WriteLine("\nNotice: AFTER often runs on a different thread than BEFORE");
+```
+
+Run it:
+
+```bash
+dotnet run test-thread-hop.cs
 ```
 
 **Expected output:**
+
 ```
-check 1 BEFORE await on thread 1
-check 2 BEFORE await on thread 1
+Starting 10 async operations...
+
+[1] BEFORE await: thread 1
+[2] BEFORE await: thread 1
 ...
-check 20 BEFORE await on thread 1
-check 5 AFTER  await on thread 4   ← different thread!
-check 3 AFTER  await on thread 7   ← different thread!
-check 1 AFTER  await on thread 4
+[10] BEFORE await: thread 1
+[5] AFTER  await: thread 4    ← different thread!
+[3] AFTER  await: thread 7    ← different thread!
+[1] AFTER  await: thread 4
 ...
+
+Notice: AFTER often runs on a different thread than BEFORE
 ```
+
+**Key observations:**
 
 | Observation | Explanation |
 |-------------|-------------|
-| All "BEFORE" on same thread | Starts are synchronous until first `await` |
-| "AFTER" scattered across threads | Continuations resume on any free pool thread |
+| All "BEFORE" on same thread | Code before `await` runs synchronously on the calling thread |
+| "AFTER" scattered across threads | After `await`, any free pool thread picks up the continuation |
 
-**Why this matters:**
-
-| | Node | .NET |
-|-|------|------|
-| Threads | 1 | Many (thread pool) |
-| After `await` | Same thread (event loop) | **Any** pool thread |
-
-This is why `lock` can't contain `await`:
-- `lock` must release on the **same thread** that acquired it
-- After `await`, you might be on a **different thread**
-- Compiler error **CS1996** prevents this bug
-- **Fix:** Use `SemaphoreSlim` — it doesn't care which thread releases it
-
-## Exercise 7.4 — Choose the right tool
-
-**Goal:** Match scenarios to tools: `Task.WhenAll`, `Task.Run`, `Parallel.For`, `Interlocked`, `lock`, `SemaphoreSlim`.
-
-**Scenarios:**
-1. Read 8 uploaded files off the request
-2. Hash + scan those 8 documents (heavy CPU)
-3. Increment shared "documents scanned today" counter
-4. Append `ScanResult` to shared `List<ScanResult>` from multiple threads
-5. Render one PDF (CPU-heavy, ~2s) while keeping request cancellable
-6. Ensure only one transfer mutates balances — method has `await _db...` calls
-
-**Solution**
-
-| # | Tool | Why |
-|---|------|-----|
-| 1 | `Task.WhenAll` | I/O-bound; start all, await all, no extra threads (= `Promise.all`) |
-| 2 | `Parallel.For` | Heavy CPU over collection → spread across cores |
-| 3 | `Interlocked.Increment` | Single `int`; atomic op beats lock |
-| 4 | `lock` | `List<T>.Add` not thread-safe (or use `ConcurrentBag`) |
-| 5 | `Task.Run` | Push CPU job off request thread → keeps `CancellationToken` responsive |
-| 6 | `SemaphoreSlim(1,1)` | Critical section has `await` → `lock` is compile error (CS1996) |
-
-**Key rule:** If the critical section contains `await`, use `SemaphoreSlim`, not `lock`.
-
-## Exercise 7.5 — Rob your own bank (the main event)
-
-**Goal:** Produce the transfer race, then fix it with `SemaphoreSlim`.
-
-**Setup:** `docker compose up -d`, `dotnet run` (Topics 5–6 state).
-
-**Steps:**
-
-| Step | Action |
-|------|--------|
-| 1 | Register fresh Alice and Bob. Total: $2,000 |
-| 2 | Fire 50 concurrent $10 transfers Alice → Bob |
-| 3 | Check balances — does total still = $2,000? |
-| 4 | Explain where money went/came from |
-| 5 | Fix with `SemaphoreSlim`, reset DB, re-test |
-| 6 | Answer: why didn't tests catch this? Why isn't semaphore the final answer? |
-
-**Step 2 — the attack:**
-
-```bash
-for i in {1..50}; do
-  curl -s -X POST http://localhost:PORT/v1/payment/transfer \
-    -H "Content-Type: application/json" \
-    -d '{"payerUserId":1,"payeeUserId":2,"amount":10}' > /dev/null &
-done; wait
-```
-
-**Step 3 — check balances:**
-
-```bash
-docker compose exec db psql -U payapp -d payapp -c 'SELECT "Id","Balance" FROM "Users";'
-```
-
-**Typical result:** Alice > $500 (lost debits), total ≠ $2,000. You printed money.
-
----
-
-**Step 4 — why it happens:**
+**Why this matters for `lock`:**
 
 ```csharp
-var payer = await _db.Users.FirstOrDefaultAsync(...);   // READ  balance = 800
-// ... another request ALSO reads 800 here ...
-if (payer.Balance < amount) ...                         // CHECK against stale 800
-payer.Balance -= amount;                                // MODIFY: both compute 790
-await _db.SaveChangesAsync();                           // WRITE: both write 790
-                                                        // ❌ One $10 debit lost!
-```
-
-Same bug as 7.1's `processed++` — read-modify-write without coordination.
-
----
-
-**Step 5 — the fix:**
-
-```csharp
-private static readonly SemaphoreSlim _transferGate = new(1, 1);  // static = one gate per process
-
-public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount)
+lock (_gate)
 {
-    if (amount <= 0) throw new ArgumentException("Amount must be positive.");
-
-    await _transferGate.WaitAsync();
-    try
-    {
-        var payer = await _db.Users.FirstOrDefaultAsync(u => u.Id == payerUserId)
-            ?? throw new KeyNotFoundException($"No user {payerUserId}.");
-        var payee = await _db.Users.FirstOrDefaultAsync(u => u.Id == payeeUserId)
-            ?? throw new KeyNotFoundException($"No user {payeeUserId}.");
-
-        if (payer.Balance < amount)
-            throw new InvalidOperationException("Insufficient funds.");
-
-        payer.Balance -= amount;
-        payee.Balance += amount;
-        await _db.SaveChangesAsync();
-    }
-    finally
-    {
-        _transferGate.Release();
-    }
+    await SomethingAsync();  // ❌ CS1996: Cannot await in the body of a lock statement
 }
 ```
 
-**Why `static`?** Service is scoped (new instance per request). Instance field → each request gets own gate → guards nothing.
+`lock` must be released by the **same thread** that acquired it. After `await`, you might be on a **different thread**. The compiler prevents this bug with error CS1996.
 
-**Why `SemaphoreSlim`?** Body has `await` → `lock` is compile error (CS1996).
+**Clean up:**
 
-**Reset and re-test:**
 ```bash
-docker compose down -v && docker compose up -d
-# re-migrate, register Alice/Bob, run attack again
+rm test-thread-hop.cs
 ```
 
-**Result:** Alice = $500, Bob = $1,500, total = $2,000. Every time.
+---
+
+## Exercise 7.5 — Try `Interlocked` on decimal (drill)
+
+`Interlocked` only works on `int`/`long`. Let's see what happens when you try it on `decimal`.
+
+**Task:** Try to use `Interlocked.Add` on a decimal and observe the compiler error.
+
+**Solution**
+
+Create `test-interlocked.cs`:
+
+```csharp
+#!/usr/bin/env dotnet
+
+// This works: int and long
+int intCounter = 0;
+long longCounter = 0L;
+
+Interlocked.Increment(ref intCounter);
+Interlocked.Add(ref longCounter, 100L);
+
+Console.WriteLine($"int: {intCounter}, long: {longCounter}");
+
+// This does NOT work: decimal
+decimal decimalTotal = 0m;
+// Interlocked.Add(ref decimalTotal, 100m);  // Uncomment to see error
+
+Console.WriteLine(@"
+Uncomment the line above to see:
+  error CS1503: Argument 1: cannot convert from 'ref decimal' to 'ref int'
+
+Why? decimal is 128 bits. CPU can only atomically swap 32 or 64 bits.
+For decimal, you must use 'lock' or 'SemaphoreSlim'.
+");
+```
+
+Run it:
+
+```bash
+dotnet run test-interlocked.cs
+```
+
+To see the actual error, uncomment the line and run again:
+
+```
+error CS1503: Argument 1: cannot convert from 'ref decimal' to 'ref int'
+```
+
+**This is why money (`decimal`) needs `SemaphoreSlim`** — there's no atomic operation for 128-bit values.
+
+**Clean up:**
+
+```bash
+rm test-interlocked.cs
+```
 
 ---
 
-**Step 6 — closing questions:**
+## Exercise 7.6 — Parallel document processing
 
-| Question | Answer |
-|----------|--------|
-| Why didn't tests catch it? | Tests run one transfer at a time. Race only exists when calls **overlap**. |
-| Why isn't semaphore the final answer? | It only guards **this process**. Two replicas = two gates = race returns. |
+When you have multiple CPU-bound tasks, `Parallel.For` spreads them across cores.
 
-**Production fix:** Push coordination to the database:
-- `SELECT ... FOR UPDATE` (row locks)
-- Or optimistic concurrency (version column)
+**Task:** Process multiple documents in parallel and measure the speedup.
 
-The semaphore is **correct** (for one process) **and insufficient** (for multiple replicas). Knowing both halves = senior answer.
+**Solution**
+
+Create `test-parallel.cs`:
+
+```csharp
+#!/usr/bin/env dotnet
+
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+
+// Simulate CPU-heavy scan
+string ScanDocument(byte[] content)
+{
+    var hash = Convert.ToHexString(SHA256.HashData(content));
+    // Burn some CPU cycles
+    double signal = 0;
+    for (int i = 0; i < 2_000_000; i++) signal += Math.Sqrt(i);
+    return hash;
+}
+
+// Create 8 test documents
+var documents = Enumerable.Range(1, 8)
+    .Select(i => Encoding.UTF8.GetBytes($"Document {i} content here"))
+    .ToArray();
+
+var results = new string[8];
+
+// Sequential processing
+var sw = Stopwatch.StartNew();
+for (int i = 0; i < 8; i++)
+    results[i] = ScanDocument(documents[i]);
+var sequentialMs = sw.ElapsedMilliseconds;
+Console.WriteLine($"Sequential: {sequentialMs}ms");
+
+// Parallel processing
+sw.Restart();
+Parallel.For(0, 8, i =>
+    results[i] = ScanDocument(documents[i]));
+var parallelMs = sw.ElapsedMilliseconds;
+Console.WriteLine($"Parallel:   {parallelMs}ms");
+
+Console.WriteLine($"Speedup:    {(double)sequentialMs / parallelMs:F1}x");
+Console.WriteLine($"Cores:      {Environment.ProcessorCount}");
+```
+
+Run it:
+
+```bash
+dotnet run test-parallel.cs
+```
+
+**Expected output (varies by machine):**
+
+```
+Sequential: 480ms
+Parallel:   120ms
+Speedup:    4.0x
+Cores:      8
+```
+
+The speedup approaches the number of cores — true parallelism.
+
+**This is impossible in Node's single-threaded model** — you'd need `worker_threads` to achieve the same effect.
+
+**Clean up:**
+
+```bash
+rm test-parallel.cs
+```
 
 ---
 
-The app now scans documents across cores and moves money correctly under fire. **Topic 8** ships it: publish, Docker, compose, and the when-Node-when-.NET answer you'll actually be asked.
+## Exercise 7.7 — Test concurrent transfers
+
+Let's verify that our `SemaphoreSlim` protection actually works under load.
+
+**Task:** Fire 50 concurrent transfers and verify balances are correct.
+
+**Solution**
+
+Make sure Alice and Bob both have $1,000:
+
+```bash
+# Reset the database
+docker compose down -v && docker compose up -d
+sleep 2
+
+# Apply migrations and seed data
+dotnet run --project src/PaymentApp.Api &
+sleep 5
+
+# Register Alice and Bob with $1000 each
+curl -X POST http://localhost:5000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice","email":"alice@bank.test","password":"Passw0rd!"}'
+
+curl -X POST http://localhost:5000/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Bob","email":"bob@bank.test","password":"Passw0rd!"}'
+```
+
+Now fire 50 concurrent $10 transfers:
+
+```bash
+# Fire 50 concurrent transfers of $10 each (Alice → Bob)
+for i in {1..50}; do
+  curl -s -X POST http://localhost:5000/v1/payment/transfer \
+    -H "Content-Type: application/json" \
+    -d '{"payerUserId":1,"payeeUserId":2,"amount":10}' &
+done
+wait
+
+# Check final balances
+docker compose exec db psql -U payapp -d payapp \
+  -c 'SELECT "Id", "Name", "Balance" FROM "Users";'
+```
+
+**Expected result:**
+
+```
+ Id | Name  | Balance
+----+-------+---------
+  1 | Alice |  500.00
+  2 | Bob   | 1500.00
+```
+
+- Alice: 1000 - (50 × 10) = 500 ✅
+- Bob: 1000 + (50 × 10) = 1500 ✅
+- Total: 2000 ✅
+
+If the semaphore weren't there, you'd see Alice with more than $500 (lost debits = free money).
+
+---
+
+## Exercise 7.8 — Build and verify
+
+**Task:** Ensure everything compiles and works.
+
+**Solution**
+
+```bash
+dotnet build
+
+# Verify transfer endpoint
+curl -X POST http://localhost:5000/v1/payment/transfer \
+  -H "Content-Type: application/json" \
+  -d '{"payerUserId":1,"payeeUserId":2,"amount":50}'
+
+# Verify document upload
+echo "Test document" > test.txt
+curl -X POST "http://localhost:5000/v1/document/upload?userId=1" \
+  -F "file=@test.txt"
+rm test.txt
+```
+
+---
+
+## What we built
+
+| File | Purpose |
+|------|---------|
+| `Application/DTOs/TransferDtos.cs` | Transfer request/response types |
+| `Application/DTOs/DocumentDtos.cs` | Scan result type |
+| `Application/Services/ITransferService.cs` | Transfer service interface |
+| `Application/Services/IDocumentService.cs` | Document service interface |
+| `Infrastructure/Services/TransferService.cs` | Transfer with `SemaphoreSlim` |
+| `Infrastructure/Services/DocumentService.cs` | CPU scan + I/O store |
+| `Api/Controllers/PaymentController.cs` | Transfer endpoint |
+| `Api/Controllers/DocumentController.cs` | Upload endpoint |
+
+**Project structure update:**
+
+```
+src/PaymentApp.Application/
+├── DTOs/
+│   ├── AuthDtos.cs
+│   ├── TransferDtos.cs (new)
+│   └── DocumentDtos.cs (new)
+└── Services/
+    ├── IAuthService.cs
+    ├── ITransferService.cs (new)
+    └── IDocumentService.cs (new)
+
+src/PaymentApp.Infrastructure/
+└── Services/
+    ├── AuthService.cs
+    ├── TransferService.cs (new)
+    └── DocumentService.cs (new)
+
+src/PaymentApp.Api/
+└── Controllers/
+    ├── AuthController.cs
+    ├── PaymentController.cs (new)
+    └── DocumentController.cs (new)
+```
+
+---
+
+## Key takeaways
+
+| Concept | Tool | When to use |
+|---------|------|-------------|
+| **I/O-bound work** | `async/await` | DB calls, HTTP requests, file reads |
+| **CPU-bound work** | `Task.Run` / `Parallel.For` | Hashing, scanning, processing |
+| **Atomic int/long** | `Interlocked` | Simple counters |
+| **Sync critical section** | `lock` | No `await` inside |
+| **Async critical section** | `SemaphoreSlim` | Has `await` inside |
+| **Many I/O calls** | `Task.WhenAll` | Fire all, await all |
+
+---
+
+## Interview talking points
+
+- "I used `SemaphoreSlim` because the critical section contains `await` — `lock` would be a compiler error (CS1996)."
+- "The semaphore is `static` because the service is scoped. An instance field would give each request its own gate, which protects nothing."
+- "For document upload, I use `Task.Run` for the CPU-heavy scan but `await` for the I/O operations. Different tools for different work types."
+- "The in-process semaphore works for a single replica. For multiple replicas, we'd need database-level locking — that's Topic 10."
+- "After `await`, you might be on a different thread. That's why `lock` can't contain `await` — it must release on the same thread that acquired it."
+
+---
+
+## Limitations to address later
+
+| Limitation | Current state | Fix in |
+|------------|---------------|--------|
+| Anyone can transfer anyone's money | `payerUserId` comes from request body | Topic 9: payer = authenticated caller |
+| Single replica only | `SemaphoreSlim` is in-process | Topic 10: database locking |
+| No authentication | All endpoints public | Topic 9: JWT authentication |
+
+---
+
+## Next: Topic 8
+
+In Topic 8, we explore the .NET Standard Library — the common APIs for HTTP, JSON, async, streams, and files that every .NET developer uses daily.

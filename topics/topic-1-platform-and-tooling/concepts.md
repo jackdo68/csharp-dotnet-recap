@@ -4,7 +4,11 @@
 
 > **What exactly are C#, .NET, and `dotnet` — and how does the toolchain map onto node/npm?**
 
-Get these three words straight first, because interviewers use them precisely. ".NET" is really two things that Node bundles into one:
+Get these three words straight first, because interviewers use them precisely.
+
+## The three-layer stack
+
+".NET" is really two things that Node bundles into one. Here's how they map:
 
 | Layer | Node world | .NET world |
 |---|---|---|
@@ -14,56 +18,82 @@ Get these three words straight first, because interviewers use them precisely. "
 | **The CLI / toolchain** | `node` + `npm` + `npx` | the `dotnet` CLI |
 | **The web framework** | Express / Fastify (installed) | ASP.NET Core (built into the platform) |
 
-The one-liner: **C# is the language, .NET is the runtime + platform it runs on, and `dotnet` is the CLI that drives it all.**
+**The one-liner:** C# is the language, .NET is the runtime + platform it runs on, and `dotnet` is the CLI that drives it all.
 
-One nuance: .NET is multi-language — the CLR runs anything that compiles to its bytecode (C#, F#, VB.NET), so ".NET : C#" is like "the JVM : Java", whereas Node only ever runs JS.
+### What is the CLR exactly?
 
-## Project anatomy — and the biggest workflow shift
+The CLR (Common Language Runtime) is .NET's execution engine. Think of it as what V8 is to JavaScript, but with key differences:
+
+| Aspect | V8 (Node) | CLR (.NET) |
+|--------|-----------|------------|
+| **Input** | JavaScript source code | IL bytecode (compiled C#) |
+| **Compilation** | JIT during execution | JIT during execution (same) |
+| **Memory management** | Garbage collection | Garbage collection (same) |
+| **Threading** | Single thread + event loop | Thread pool (multiple real threads) |
+| **Type information** | Erased at runtime | Preserved at runtime |
+
+The CLR is multi-language — it runs anything that compiles to its bytecode (C#, F#, VB.NET). So ".NET : C#" is like "JVM : Java", whereas Node only ever runs JavaScript.
+
+### What is the BCL?
+
+The Base Class Library (BCL) is .NET's standard library — the `System.*` namespaces that come built-in. It's like Node's core modules (`fs`, `http`, `path`, `crypto`) but much larger:
+
+| Node module | .NET namespace |
+|-------------|----------------|
+| `fs` | `System.IO` |
+| `http` | `System.Net.Http` |
+| `path` | `System.IO.Path` |
+| `crypto` | `System.Security.Cryptography` |
+| `stream` | `System.IO.Stream` |
+| `util.promisify` | Built into `Task`-based APIs |
+
+We cover these in depth in Topic 8 (.NET Standard Library).
+
+## Project anatomy
 
 Scaffold a project and look inside:
 
 ```bash
-dotnet new console -n PaymentBasics
-cd PaymentBasics
+dotnet new console -n HelloWorld
+cd HelloWorld
 dotnet run          # prints Hello, World!
 ```
 
 What's in the folder (vs a Node project):
 
-- **`PaymentBasics.csproj`** — your `package.json`, but XML: dependencies, target framework, build settings.
-- **`Program.cs`** — source code. Modern C# allows top-level statements: script-style code with no boilerplate `Main` method.
-- **`bin/` and `obj/`** — build output, like `dist/`. Git-ignore them.
-- **No `node_modules`** — NuGet packages live in a per-user global cache (`~/.nuget/packages`), referenced by the project, never copied in.
+| File/Folder | Purpose | Node equivalent |
+|-------------|---------|-----------------|
+| `HelloWorld.csproj` | Project file (XML) | `package.json` |
+| `Program.cs` | Entry point | `index.js` |
+| `bin/` | Compiled output | `dist/` |
+| `obj/` | Intermediate build files | Cache folders |
 
-Here's the big mental shift: **you never import your own files.** Every `.cs` file in the project compiles together automatically. `using Xyz;` at the top of a file imports a *namespace* (a named group of types), never a file path. There is no `import { PaymentService } from './services/payment'` equivalent — organization is by namespace (Topic 2 covers the conventions), and the compiler finds the files itself. No relative-path import spaghetti, no barrel files, no path aliases.
+**What's NOT there:** `node_modules`. NuGet packages live in a per-user global cache (`~/.nuget/packages`), referenced by the project, never copied in.
 
-## The dotnet CLI is node + npm in one binary
+### The csproj file explained
 
-| Task | Node | .NET |
-|---|---|---|
-| Run | `node app.js` | `dotnet run` (compiles, then runs) |
-| Compile only | `tsc` | `dotnet build` |
-| Add dependency | `npm install pkg` | `dotnet add package PkgName` |
-| Test | `npx jest` | `dotnet test` |
-| Watch mode | `nodemon` | `dotnet watch run` |
-| Scaffold | `npm create ...` | `dotnet new <template> -n Name` |
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
 
-(The full cheat sheet is on the **Commands** page.)
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
 
-## NuGet — npm for .NET
+</Project>
+```
 
-NuGet is the package ecosystem: [nuget.org](https://www.nuget.org) is the public registry, and the `dotnet` CLI is the client (there's no separate `npm`-style tool to install). The pieces map one-to-one:
+| Element | What it does | package.json equivalent |
+|---------|--------------|-------------------------|
+| `Sdk` attribute | Which build system to use | (implicit in npm) |
+| `OutputType` | `Exe` = runnable, `Library` = DLL | `"type": "module"` |
+| `TargetFramework` | .NET version | `"engines": { "node": ">=18" }` |
+| `ImplicitUsings` | Auto-import common namespaces | (no equivalent) |
+| `Nullable` | Enable null-safety warnings | `"strict": true` in tsconfig |
 
-| Node world | .NET world |
-|---|---|
-| npm registry (npmjs.com) | NuGet registry (nuget.org) |
-| `dependencies` in `package.json` | `<PackageReference>` entries in the `.csproj` |
-| `npm install lodash` | `dotnet add package Humanizer` |
-| `package-lock.json` | `packages.lock.json` (opt-in — exact versions in the `.csproj` usually suffice) |
-| `node_modules/` per project | one global cache: `~/.nuget/packages`, shared by every project |
-| `npm install` after clone | nothing — restore runs automatically inside `dotnet build` / `dotnet run` |
-
-Running `dotnet add package Humanizer` edits the `.csproj` for you:
+Dependencies appear as `<PackageReference>` elements:
 
 ```xml
 <ItemGroup>
@@ -71,40 +101,153 @@ Running `dotnet add package Humanizer` edits the `.csproj` for you:
 </ItemGroup>
 ```
 
-Two differences worth internalizing:
+### The biggest workflow shift: no file imports
 
-- **One cache per machine, not one folder per project.** Each package version downloads once into `~/.nuget/packages`; every project references it from there at build time. No 500 MB folder to delete, nothing package-related to `.gitignore`, and cloning a repo is instant because dependencies were never in it.
-- **Packages ship compiled, not as source.** A `.nupkg` is a zip of already-compiled DLLs plus metadata. There's no install-time build/transpile step (and no `postinstall` scripts) — the compiler just links against the assembly.
+In Node/TypeScript, you import specific files:
 
-## Single-file scripts — the `node script.js` experience
+```typescript
+import { PaymentService } from './services/payment';
+import { User } from '../models/user';
+```
 
-You always need the SDK installed (C# has no pre-installed runtime, same as JS needs Node), but since .NET 10 you **don't** need a project. A single `.cs` file runs directly:
+In C#, **you never import files.** Every `.cs` file in the project compiles together automatically. The `using` directive imports *namespaces* (a named group of types), never file paths:
+
+```csharp
+using PaymentApp.Domain.Entities;  // imports all types in this namespace
+```
+
+| Node/TS | C# |
+|---------|-----|
+| Import specific files | All files compile together |
+| `import { X } from './path'` | `using Namespace;` |
+| Barrel files (`index.ts`) | Namespaces |
+| Path aliases (`@/services`) | Project references |
+
+**Why this matters:** No relative-path spaghetti, no barrel files, no circular dependency headaches. Organization is by namespace, and the compiler finds the files itself.
+
+## Solutions and projects
+
+Node has one `package.json` per project. .NET has two levels:
+
+| Concept | Purpose | Node equivalent |
+|---------|---------|-----------------|
+| **Project** (`.csproj`) | One compilable unit | One `package.json` |
+| **Solution** (`.sln`) | Groups multiple projects | Monorepo root |
+
+A real application typically has multiple projects in one solution:
+
+```
+PaymentApp.sln
+├── PaymentApp.Domain/           # Core business logic
+├── PaymentApp.Application/      # Use cases, DTOs
+├── PaymentApp.Infrastructure/   # Database, external services
+└── PaymentApp.Api/              # Web API entry point
+```
+
+Projects reference each other with `<ProjectReference>`:
+
+```xml
+<!-- In PaymentApp.Api.csproj -->
+<ItemGroup>
+  <ProjectReference Include="..\PaymentApp.Application\PaymentApp.Application.csproj" />
+</ItemGroup>
+```
+
+This is like npm workspaces, but with compile-time enforcement: if Api references Application, Application can't reference Api back — the compiler will error.
+
+## The dotnet CLI
+
+The `dotnet` CLI is `node` + `npm` in one binary:
+
+| Task | Node | .NET |
+|---|---|---|
+| Run | `node app.js` | `dotnet run` |
+| Compile only | `tsc` | `dotnet build` |
+| Add dependency | `npm install pkg` | `dotnet add package PkgName` |
+| Test | `npx jest` | `dotnet test` |
+| Watch mode | `nodemon` | `dotnet watch run` |
+| Scaffold | `npm create ...` | `dotnet new <template>` |
+| Create solution | (manual) | `dotnet new sln` |
+| Add project to solution | (manual) | `dotnet sln add <project>` |
+
+(The full cheat sheet is on the **Commands** page.)
+
+## NuGet — npm for .NET
+
+NuGet is the package ecosystem: [nuget.org](https://www.nuget.org) is the public registry.
+
+| Aspect | npm | NuGet |
+|--------|-----|-------|
+| Registry | npmjs.com | nuget.org |
+| Config file | `package.json` | `.csproj` |
+| Add package | `npm install lodash` | `dotnet add package Humanizer` |
+| Lock file | `package-lock.json` | `packages.lock.json` (opt-in) |
+| Package location | `node_modules/` per project | `~/.nuget/packages` (global cache) |
+| Post-clone install | `npm install` | Nothing (auto-restores on build) |
+
+### Why the global cache matters
+
+In Node, every project copies packages into its own `node_modules`. Clone three projects using lodash, get three copies. Delete `node_modules` to "clean up", wait minutes to reinstall.
+
+In .NET, packages download once to `~/.nuget/packages`. Every project references them from there. Benefits:
+
+- **Repos stay light** — no 500MB folders to clone
+- **No post-clone install** — dependencies restore automatically on first build
+- **Disk space** — one copy per version, shared across all projects
+
+### Packages ship compiled
+
+A `.nupkg` (NuGet package) is a zip of already-compiled DLLs. There's no install-time build step, no `postinstall` scripts. The compiler just links against the assembly.
+
+## Single-file scripts (new in .NET 10)
+
+For quick scripts, you don't need a project. A single `.cs` file runs directly:
 
 ```bash
-echo 'Console.WriteLine("Hello from one file!");' > hello.cs
+echo 'Console.WriteLine("Hello!");' > hello.cs
 dotnet run hello.cs
 ```
 
-Two extras that complete the Node-like scripting feel:
-
-**Shebang support** — make a `.cs` file executable like a shell script:
-
-```csharp
-#!/usr/bin/env dotnet
-Console.WriteLine("I'm a C# script");
-```
-
-**NuGet packages without a project** — a `#:package` directive replaces `package.json` for one-off scripts:
+**With packages** — the `#:package` directive replaces `package.json`:
 
 ```csharp
 #:package Humanizer@2.14.1
 using Humanizer;
-Console.WriteLine("TransferRequest".Humanize());   // "Transfer request"
+Console.WriteLine("TransferRequest".Humanize());  // "Transfer request"
 ```
 
-If a script grows up, `dotnet project convert hello.cs` turns it into a normal project.
+**Shebang support** — make it executable:
 
-Caveats: this is new in .NET 10 (late 2025) — many tutorials and interviewers won't know it exists, so treat it as a scripting convenience, not the norm. First run is slower than `node` (it's compiling; later runs are cached). Real work — multiple files, tests, web APIs — uses projects, and the `.csproj` world is what you'll see in any bank codebase.
+```csharp
+#!/usr/bin/env dotnet
+Console.WriteLine("I'm a script!");
+```
+
+```bash
+chmod +x script.cs
+./script.cs
+```
+
+**Graduate to a project:**
+
+```bash
+dotnet project convert script.cs
+```
+
+**Caveat:** This is new in .NET 10 (late 2025). Most codebases and interviewers won't know it. Treat it as scripting convenience — real work uses projects.
+
+## Why .NET 10?
+
+This course uses .NET 10, the current LTS (Long Term Support) release. Key features we use:
+
+| Feature | What it enables |
+|---------|-----------------|
+| File-scoped namespaces | One less level of indentation |
+| Top-level statements | No `Main` method boilerplate |
+| Single-file scripts | `dotnet run app.cs` |
+| `#:package` directive | NuGet in scripts |
+| Global usings | Common namespaces auto-imported |
+| Nullable reference types | Null-safety by default |
 
 ## Interview talking points
 
@@ -112,3 +255,5 @@ Caveats: this is new in .NET 10 (late 2025) — many tutorials and interviewers 
 - The CLR is to C# what the JVM is to Java; Node by contrast runs only JS.
 - No file imports: code is organized by **namespace**, all `.cs` files in a project compile together.
 - Dependencies live in a global NuGet cache — there is no `node_modules` to weigh down a repo.
+- Solutions group multiple projects; projects reference each other with compile-time dependency enforcement.
+- ASP.NET Core is built into the platform — it's not a third-party framework like Express.

@@ -2,6 +2,10 @@
 
 > **What changes when my code can genuinely run on many threads at once?**
 
+This topic explains why .NET's threading model is fundamentally different from Node's, and how to write correct concurrent code.
+
+---
+
 ## The core difference
 
 | Node | .NET |
@@ -11,6 +15,47 @@
 | CPU work blocks everything | CPU work runs on multiple cores |
 | After `await`, same thread resumes | After `await`, **any** thread may resume |
 
+**What "concurrency vs parallelism" means:**
+
+| Term | Definition | Example |
+|------|------------|---------|
+| **Concurrency** | Multiple tasks in progress (interleaved on one core) | Node handling 1000 HTTP requests |
+| **Parallelism** | Multiple tasks running simultaneously (on multiple cores) | .NET scanning 8 documents across 8 cores |
+
+Node has concurrency (many tasks, one thread). .NET has both (many tasks, many threads).
+
+---
+
+## The thread pool: how it actually works
+
+**No, it doesn't spawn a new thread per request.**
+
+| Aspect | How it works |
+|--------|--------------|
+| Pool size | Starts at ~1 thread per core. Grows on demand. |
+| Reuse | Threads are **reused**. Finished request → thread returns to pool. |
+| Max threads | Default ~32,767. In practice, OS/memory limits hit first. |
+| Growth rate | Adds ~1-2 threads/second when pool is exhausted (slow on purpose). |
+| Shrink | Idle threads retire after ~15–20 seconds. |
+
+**Why threads are reused:** Each thread costs ~1MB of memory (for its stack). Creating/destroying threads is expensive. The pool amortizes this cost.
+
+**During `await`:** The thread returns to the pool. No thread is held while waiting for I/O. This is the same trick Node uses — just with many threads instead of one.
+
+### Thread pool vs event loop — trade-offs
+
+| | Node (event loop) | .NET (thread pool) |
+|-|-------------------|-------------------|
+| **Memory per connection** | ~tens of KB | ~1MB per thread |
+| **Max concurrent requests** | Very high (limited by memory) | Limited by thread pool size |
+| **CPU-bound work** | Blocks everything | Runs on other threads |
+| **Context switching** | None (one thread) | Yes (OS switches threads) |
+| **Best for** | Many I/O-bound connections | Mixed I/O + CPU workloads |
+
+**The danger:** If all threads are blocked (e.g., `.Result` calls or slow sync code), the pool is exhausted → requests queue up → timeouts.
+
+---
+
 ## The one rule (interview favorite)
 
 | Work type | Examples | Use | Why |
@@ -19,18 +64,23 @@
 | **CPU-bound** | Hashing, scanning, image processing | `Task.Run` / `Parallel` | Spread across cores |
 
 **Common mistakes:**
-- `Task.Run` for I/O → wastes a thread
-- `await` alone for heavy CPU → blocks that thread
+
+| Mistake | Why it's wrong |
+|---------|----------------|
+| `Task.Run` for I/O | Wastes a thread — the work is waiting, not computing |
+| `await` alone for heavy CPU | Blocks that thread — no parallelism |
+
+---
 
 ## PaymentApp example: `/v1/document/upload`
 
-A user uploads a KYC document (a `.txt` for us):
+A user uploads a document. The endpoint does three things:
 
 | Step | Type | Tool |
 |------|------|------|
 | Read uploaded bytes | I/O | `await file.CopyToAsync()` |
 | Hash + scan content | CPU | `Task.Run(() => Scan(...))` |
-| Write to disk | I/O | `await StoreAsync()` |
+| Write to disk | I/O | `await File.WriteAllBytesAsync()` |
 
 **The CPU-bound scan** (no awaits — burns a core):
 
@@ -39,7 +89,9 @@ public ScanResult Scan(string fileName, byte[] content)
 {
     var hash = Convert.ToHexString(SHA256.HashData(content));
     var text = Encoding.UTF8.GetString(content);
-    // ... CPU-heavy work ...
+    // CPU-heavy work: word count, malware detection, etc.
+    var words = text.Split(default(char[]?), StringSplitOptions.RemoveEmptyEntries).Length;
+    var flagged = text.Contains("fraud", StringComparison.OrdinalIgnoreCase);
     return new ScanResult(fileName, words, hash, flagged);
 }
 ```
@@ -54,8 +106,8 @@ public async Task<ActionResult<ScanResult>> Upload(int userId, IFormFile file)
     await file.CopyToAsync(ms);                   // I/O: await
     var bytes = ms.ToArray();
 
-    var result = await Task.Run(() => _documents.Scan(file.FileName, bytes));  // CPU: Task.Run
-    await _documents.StoreAsync(userId, bytes);   // I/O: await
+    var result = await Task.Run(() => _service.Scan(file.FileName, bytes));  // CPU: Task.Run
+    await _service.StoreAsync(userId, bytes);     // I/O: await
     return Ok(result);
 }
 ```
@@ -69,57 +121,48 @@ In .NET:
 - One CPU-heavy request doesn't block others
 - `Task.Run` doesn't "unblock the server" — it just moves work to another pool thread
 
-### How the thread pool actually works
-
-**No, it doesn't spawn a new thread per request.**
-
-| Aspect | How it works |
-|--------|--------------|
-| Pool size | Starts at ~1 thread per core. Grows on demand. |
-| Reuse | Threads are **reused**. Finished request → thread returns to pool. |
-| Max threads | Default ~32,767. In practice, OS/memory limits hit first. |
-| Growth rate | Adds ~1-2 threads/second when pool is exhausted (slow on purpose). |
-| Shrink | Idle threads retire after ~15–20 seconds. |
-
-**The key insight:** Threads are expensive to create (~1MB stack each). The pool avoids this by **reusing** them.
-
-### Thread pool vs event loop — trade-offs
-
-| | Node (event loop) | .NET (thread pool) |
-|-|-------------------|-------------------|
-| **Memory per connection** | ~tens of KB | ~1MB per thread |
-| **Max concurrent requests** | Very high (limited by memory) | Limited by thread pool size |
-| **CPU-bound work** | Blocks everything | Runs on other threads |
-| **Context switching** | None (one thread) | Yes (OS switches threads) |
-| **Best for** | Many I/O-bound connections | Mixed I/O + CPU workloads |
-
-**Why .NET can still handle thousands of requests:**
-- During `await`, the thread returns to the pool (no thread held during I/O)
-- Only requests actively executing code hold a thread
-- Same trick as Node — just with many threads instead of one
-
-⚠️ **The danger:** If all threads are blocked (e.g., `.Result` calls or slow sync code), the pool is exhausted → requests queue up → timeouts.
-
 **When `Task.Run` actually helps:** batches across cores.
 
 ```csharp
 // Scan 8 documents across all cores — takes ~1 document's time, not 8
-Parallel.For(0, contents.Length, i =>
-    results[i] = _documents.Scan(contents[i].FileName, contents[i].Bytes));
+var results = new ScanResult[8];
+Parallel.For(0, 8, i =>
+    results[i] = _service.Scan(files[i].Name, files[i].Bytes));
 ```
 
 This is true parallelism — impossible on Node's single thread.
+
+---
 
 ## Race conditions
 
 Two threads touching the same variable = race condition.
 
-**The bug:** `flagged++` is actually three operations:
+**The bug:** `counter++` is actually three operations:
 
 ```
 Thread A: read 5 → add 1 → write 6
 Thread B: read 5 → add 1 → write 6  ← both wrote 6, one increment lost
 ```
+
+This is called **read-modify-write** — the most common source of race conditions.
+
+### The money bug (why this matters)
+
+The transfer endpoint has the same bug:
+
+```csharp
+var payer = await _db.Users.FirstOrDefaultAsync(...);  // READ  balance = 800
+// ... another request ALSO reads 800 here ...
+if (payer.Balance < amount) ...                         // CHECK stale 800
+payer.Balance -= amount;                                // MODIFY: both compute 790
+await _db.SaveChangesAsync();                           // WRITE: both write 790
+                                                        // ❌ One $10 debit lost!
+```
+
+Same bug as `counter++` — read-modify-write without coordination. **You can print money.**
+
+---
 
 ## The three fixes
 
@@ -134,16 +177,16 @@ Thread B: read 5 → add 1 → write 6  ← both wrote 6, one increment lost
 For single `int`/`long` operations only:
 
 ```csharp
-int flagged = 0;
+int counter = 0;
 
 // ❌ Race condition
-flagged++;
+counter++;
 
 // ✅ Atomic — no race
-Interlocked.Increment(ref flagged);
+Interlocked.Increment(ref counter);
 ```
 
-⚠️ **Limitation:** Only works on `int`/`long`. No `decimal` support — money needs `lock` or `SemaphoreSlim`.
+**Limitation:** Only works on `int`/`long`. No `decimal` support — **money needs `lock` or `SemaphoreSlim`**.
 
 ### 2. `lock` — sync critical section
 
@@ -172,7 +215,7 @@ public void AddToTotal(decimal amount)
 | Accumulating results | `lock (_results) { _results.Add(item); }` |
 | Thread-safe counters | When you need multiple operations (read + check + update) |
 
-⚠️ **Limitation:** Can't contain `await` — compiler error CS1996. Why? After `await`, a different thread may resume, but `lock` must be released by the same thread that acquired it.
+**Limitation:** Can't contain `await` — compiler error CS1996. Why? After `await`, a different thread may resume, but `lock` must be released by the same thread that acquired it.
 
 ### 3. `SemaphoreSlim` — async critical section
 
@@ -220,32 +263,9 @@ public async Task TransferAsync(...)
 - Has `await` inside? → `SemaphoreSlim`
 - No `await`? → `lock` (simpler, slightly faster)
 
-| Sync | Async |
-|------|-------|
-| `lock (gate) { ... }` | `await _gate.WaitAsync(); try { ... } finally { _gate.Release(); }` |
+**Limitation:** Only works **within one process**. Multiple API replicas = each has its own gate = race returns. Production fix: database row locks (`SELECT ... FOR UPDATE`) or optimistic concurrency. We address this in Topic 10.
 
-⚠️ **Limitation:** Only works **within one process**. Multiple API replicas = each has its own gate = race returns. Production fix: database row locks (`SELECT ... FOR UPDATE`) or optimistic concurrency.
-
-## The money bug
-
-Your `TransferAsync` has the race condition:
-
-```csharp
-var payer = await _db.Users.FirstOrDefaultAsync(...);  // READ  balance = 800
-// ... another request reads 800 here too ...
-if (payer.Balance < amount) ...                         // CHECK stale 800
-payer.Balance -= amount;                                // MODIFY: both compute 790
-await _db.SaveChangesAsync();                           // WRITE: both write 790 — one debit lost
-```
-
-**Why simple fixes don't work:**
-
-| Fix | Why it fails |
-|-----|--------------|
-| `Interlocked` | Only works on `int`/`long`, not `decimal` |
-| `lock` | Can't contain `await` (CS1996) |
-
-**The fix:** `SemaphoreSlim(1, 1)` — see section above.
+---
 
 ## Task vs Promise — where the analogy breaks
 
@@ -315,7 +335,7 @@ public async Task<T> GetAsync() => await _inner.GetAsync();
 public Task<T> GetAsync() => _inner.GetAsync();
 ```
 
-⚠️ **But never elide around `using`/`try`:**
+**But never elide around `using`/`try`:**
 
 ```csharp
 public Task<string> FetchAsync()
@@ -333,18 +353,9 @@ Both use the same OS async I/O (epoll/kqueue/IOCP). The difference is *who runs 
 |-|------|------|
 | After `await` resumes on | The one event-loop thread | Any free pool thread |
 
-This is why `lock` can't contain `await` (CS1996) — thread that took the lock may not be the thread that releases it.
+This is why `lock` can't contain `await` (CS1996) — the thread that took the lock may not be the thread that releases it.
 
-## Tool cheat sheet
-
-| Tool | Use for | Node equivalent |
-|------|---------|-----------------|
-| `async/await` + `Task.WhenAll` | Many I/O calls at once | `Promise.all` |
-| `Task.Run(() => ...)` | One CPU job off request thread | `worker_threads` |
-| `Parallel.For` | CPU work over a collection, across cores | — (no equivalent) |
-| `Interlocked` | Atomic `int`/`long` updates | — |
-| `lock` | Sync critical section | mutex |
-| `SemaphoreSlim(1,1)` | Async critical section (with `await`) | mutex |
+---
 
 ## The golden rule: async all the way down
 
@@ -380,15 +391,20 @@ Controller (async) → Service (async) → Repository (async) → DbContext (asy
   await               await               await                await
 ```
 
-**One exception:** `Main` or top-level code where you *must* block:
+---
 
-```csharp
-// Console app entry point — this is OK
-public static void Main()
-{
-    RunAsync().GetAwaiter().GetResult();  // accepted pattern at the very top
-}
-```
+## Tool cheat sheet
+
+| Tool | Use for | Node equivalent |
+|------|---------|-----------------|
+| `async/await` + `Task.WhenAll` | Many I/O calls at once | `Promise.all` |
+| `Task.Run(() => ...)` | One CPU job off request thread | `worker_threads` |
+| `Parallel.For` | CPU work over a collection, across cores | — (no equivalent) |
+| `Interlocked` | Atomic `int`/`long` updates | — |
+| `lock` | Sync critical section | mutex |
+| `SemaphoreSlim(1,1)` | Async critical section (with `await`) | mutex |
+
+---
 
 ## Interview talking points
 

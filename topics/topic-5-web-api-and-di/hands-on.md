@@ -129,6 +129,19 @@ public class PaymentDbContext : DbContext
 | `HasPrecision(18, 2)` | Decimal precision for money |
 | `Ignore(e => e.DomainEvents)` | Don't try to persist this |
 
+**How EF Core discovers what to map:**
+
+EF Core uses **reflection** to find properties (members with getters/setters). Methods are behavior, not data, so they're never considered for column mapping in the first place.
+
+| Member Type | EF Core Behavior |
+|-------------|------------------|
+| Properties (`public string Name { get; set; }`) | Mapped to columns by default |
+| Fields (`private string _name;`) | Not mapped unless explicitly configured |
+| Methods (`public void Debit(decimal amount)`) | Never considered — not data |
+| Computed properties (no setter, or `[NotMapped]`) | Needs explicit ignore |
+
+**What is reflection?** The ability to inspect types at runtime — examining what properties, methods, and attributes a class has while the program is running. In TypeScript, types are erased at runtime (you can't ask "what properties does this class have?"). In C#, types exist at runtime (reified generics), so EF Core can literally query `typeof(User).GetProperties()` to discover your entity's shape. This is Topic 3's runtime types in action.
+
 ---
 
 ## Exercise 5.4 — Create DTOs in Application layer

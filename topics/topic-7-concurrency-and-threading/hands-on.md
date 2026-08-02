@@ -290,6 +290,48 @@ public class DocumentController : ControllerBase
 }
 ```
 
+**What is `IFormFile`?**
+
+`IFormFile` represents an uploaded file from a `multipart/form-data` request — the same format HTML forms use with `<input type="file">`:
+
+| Property/Method | Returns |
+|-----------------|---------|
+| `file.FileName` | Original filename: `"document.txt"` |
+| `file.ContentType` | MIME type: `"text/plain"` |
+| `file.Length` | Size in bytes |
+| `file.OpenReadStream()` | Stream to read the raw bytes |
+| `file.CopyToAsync(stream)` | Copy content to another stream |
+
+**What does the request look like on the wire?**
+
+Not JSON — it's `multipart/form-data`:
+
+```http
+POST /v1/document/upload?userId=1 HTTP/1.1
+Content-Type: multipart/form-data; boundary=----FormBoundary
+
+------FormBoundary
+Content-Disposition: form-data; name="file"; filename="document.txt"
+Content-Type: text/plain
+
+(raw file bytes here)
+------FormBoundary--
+```
+
+With curl, the `-F` flag sends `multipart/form-data`:
+
+```bash
+curl -X POST "http://localhost:5000/v1/document/upload?userId=1" \
+  -F "file=@./document.txt"
+```
+
+**How parameters bind:**
+
+| Parameter | Comes from |
+|-----------|------------|
+| `int userId` | Query string: `?userId=1` |
+| `IFormFile file` | Form field named "file" in multipart body |
+
 **Understanding the code:**
 
 | Line | Type | Tool | Why |

@@ -106,6 +106,38 @@ public class AuthController : ControllerBase
 }
 ```
 
+### What is `ActionResult<T>`?
+
+A wrapper that lets you return **either** a success response (the `T`) **or** an HTTP error — without changing the return type:
+
+```csharp
+public async Task<ActionResult<UserResponse>> Register(RegisterRequest request)
+{
+    // Return the actual object → 200 OK with JSON body
+    return Ok(new UserResponse(...));
+
+    // Or return errors
+    return BadRequest(new { error = "Invalid email" });  // 400
+    return NotFound();                                    // 404
+    return Forbid();                                      // 403
+    return CreatedAtAction(...);                          // 201
+}
+```
+
+In TypeScript/Express, you'd do `res.status(400).json({...})` — same idea, different spelling. The `ActionResult<T>` return type tells Swagger what the success shape looks like (`UserResponse`), while still allowing error responses.
+
+**Common `ControllerBase` helper methods:**
+
+| Method | HTTP Status | When to use |
+|--------|-------------|-------------|
+| `Ok(value)` | 200 | Success with data |
+| `CreatedAtAction(action, value)` | 201 | Resource created — includes `Location` header |
+| `NoContent()` | 204 | Success, no body |
+| `BadRequest(value)` | 400 | Invalid input |
+| `NotFound()` | 404 | Resource doesn't exist |
+| `Forbid()` | 403 | Not allowed |
+| `Unauthorized()` | 401 | Not authenticated |
+
 ### Where does a request bind from? (body / route / query)
 
 The `Register(RegisterRequest request)` above never says *where* `request` comes from — `[ApiController]` **infers** the source from the parameter's type and the route template:

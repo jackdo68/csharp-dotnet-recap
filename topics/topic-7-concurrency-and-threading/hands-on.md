@@ -1,61 +1,48 @@
 # Topic 7: Hands On
 
-> **The PaymentApp build:** Solution structure → Domain models → Runtime utilities → Exceptions → Web API + EF Core → EF Core deep dive → **Transfer endpoint + Document upload** → .NET Standard Library → Authentication → Production
+> **The PaymentApp build:** Solution structure → Domain models → Runtime utilities → Exceptions → Web API + EF Core → EF Core deep dive → **Fix transfer race condition** → .NET Standard Library → Authentication → Production
 
-Topic 6 explored EF Core internals. This topic adds the transfer endpoint (with proper concurrency from the start) and a CPU-bound document upload feature.
+Topic 5 introduced the transfer endpoint with a race condition bug (discussed in Topic 7 concepts). This topic fixes it with `SemaphoreSlim` and adds a CPU-bound document upload feature.
 
 **Prerequisites:** Complete Topic 6 hands-on (working PaymentApp API with PostgreSQL).
 
 ---
 
-## Exercise 7.1 — Add the transfer endpoint with proper locking
+## Exercise 7.1 — Fix the transfer race condition
 
-Money transfers have a classic race condition: read-modify-write without coordination. We'll implement it correctly from the start using `SemaphoreSlim`.
+In Topic 5, we created `PaymentService.TransferAsync()` without concurrency protection. Two simultaneous transfers can read-modify-write the same balance, causing lost updates. Let's fix it.
 
-**Task:** Add transfer functionality to PaymentApp.
-
-**Solution**
-
-**Step 1:** Add DTOs for transfer in `src/PaymentApp.Application/DTOs/TransferDtos.cs`:
+**The bug (from Topic 5):**
 
 ```csharp
-namespace PaymentApp.Application.DTOs;
-
-public record TransferRequest(int PayerUserId, int PayeeUserId, decimal Amount);
-
-public record TransferResponse(
-    int PayerUserId,
-    decimal PayerNewBalance,
-    int PayeeUserId,
-    decimal PayeeNewBalance,
-    DateTime TransferredAt);
-```
-
-**Step 2:** Add the transfer service interface in `src/PaymentApp.Application/Services/ITransferService.cs`:
-
-```csharp
-using PaymentApp.Application.DTOs;
-
-namespace PaymentApp.Application.Services;
-
-public interface ITransferService
+// PaymentService.cs — NO LOCKING (race condition!)
+public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount)
 {
-    Task<TransferResponse> TransferAsync(TransferRequest request);
+    var payer = await _db.Users.FirstOrDefaultAsync(u => u.Id == payerUserId);
+    var payee = await _db.Users.FirstOrDefaultAsync(u => u.Id == payeeUserId);
+
+    payer.Withdraw(amount);  // Read $1000, subtract $100 = $900
+    payee.Deposit(amount);
+
+    await _db.SaveChangesAsync();  // Write $900 — but another request already wrote $950!
 }
 ```
 
-**Step 3:** Implement the service with `SemaphoreSlim` in `src/PaymentApp.Infrastructure/Services/TransferService.cs`:
+**Task:** Update `PaymentService` to use `SemaphoreSlim` for safe concurrent transfers.
+
+**Solution**
+
+Update `src/PaymentApp.Infrastructure/Services/PaymentService.cs`:
 
 ```csharp
 using Microsoft.EntityFrameworkCore;
-using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Exceptions;
 using PaymentApp.Infrastructure.Data;
 
 namespace PaymentApp.Infrastructure.Services;
 
-public class TransferService : ITransferService
+public class PaymentService : IPaymentService
 {
     private readonly PaymentDbContext _db;
 
@@ -63,18 +50,18 @@ public class TransferService : ITransferService
     // SemaphoreSlim(1, 1) = mutex — only one transfer at a time
     private static readonly SemaphoreSlim _transferGate = new(1, 1);
 
-    public TransferService(PaymentDbContext db)
+    public PaymentService(PaymentDbContext db)
     {
         _db = db;
     }
 
-    public async Task<TransferResponse> TransferAsync(TransferRequest request)
+    public async Task TransferAsync(int payerUserId, int payeeUserId, decimal amount)
     {
         // Validation before acquiring the lock
-        if (request.Amount <= 0)
-            throw InvalidTransferException.NegativeAmount(request.Amount);
+        if (amount <= 0)
+            throw InvalidTransferException.NegativeAmount(amount);
 
-        if (request.PayerUserId == request.PayeeUserId)
+        if (payerUserId == payeeUserId)
             throw InvalidTransferException.SameUser();
 
         // Acquire the semaphore — only one transfer executes at a time
@@ -82,24 +69,18 @@ public class TransferService : ITransferService
         try
         {
             // Now safe: no other transfer can read-modify-write concurrently
-            var payer = await _db.Users.FirstOrDefaultAsync(u => u.Id == request.PayerUserId)
-                ?? throw new UserNotFoundException(request.PayerUserId);
+            var payer = await _db.Users.FirstOrDefaultAsync(u => u.Id == payerUserId)
+                ?? throw new UserNotFoundException(payerUserId);
 
-            var payee = await _db.Users.FirstOrDefaultAsync(u => u.Id == request.PayeeUserId)
-                ?? throw new UserNotFoundException(request.PayeeUserId);
+            var payee = await _db.Users.FirstOrDefaultAsync(u => u.Id == payeeUserId)
+                ?? throw new UserNotFoundException(payeeUserId);
 
-            // Domain method throws InsufficientBalanceException if needed
-            payer.Withdraw(request.Amount);
-            payee.Deposit(request.Amount);
+            // Domain logic handles validation and events
+            payer.Withdraw(amount);
+            payee.Deposit(amount);
 
+            // One commit, both changes
             await _db.SaveChangesAsync();
-
-            return new TransferResponse(
-                payer.Id,
-                payer.Balance,
-                payee.Id,
-                payee.Balance,
-                DateTime.UtcNow);
         }
         finally
         {
@@ -110,7 +91,15 @@ public class TransferService : ITransferService
 }
 ```
 
-**Understanding the code:**
+**What changed:**
+
+| Before (Topic 5) | After (Topic 7) |
+|------------------|-----------------|
+| No locking | `static SemaphoreSlim _transferGate` |
+| Race condition possible | `await _transferGate.WaitAsync()` before critical section |
+| No cleanup guarantee | `try`/`finally` ensures `Release()` |
+
+**Understanding the fix:**
 
 | Element | Why |
 |---------|-----|
@@ -124,58 +113,7 @@ public class TransferService : ITransferService
 
 **Why `static`?** The service is registered as `Scoped`, meaning each request gets a new instance. If the semaphore were an instance field, each request would have its own gate, providing no protection.
 
-**Step 4:** Add the controller in `src/PaymentApp.Api/Controllers/PaymentController.cs`:
-
-```csharp
-using Microsoft.AspNetCore.Mvc;
-using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
-using PaymentApp.Domain.Exceptions;
-
-namespace PaymentApp.Api.Controllers;
-
-[ApiController]
-[Route("v1/payment")]
-public class PaymentController : ControllerBase
-{
-    private readonly ITransferService _transferService;
-
-    public PaymentController(ITransferService transferService)
-    {
-        _transferService = transferService;
-    }
-
-    [HttpPost("transfer")]
-    public async Task<ActionResult<TransferResponse>> Transfer(TransferRequest request)
-    {
-        try
-        {
-            var result = await _transferService.TransferAsync(request);
-            return Ok(result);
-        }
-        catch (UserNotFoundException ex)
-        {
-            return NotFound(new { code = ex.Code, message = ex.Message });
-        }
-        catch (InsufficientBalanceException ex)
-        {
-            return BadRequest(new { code = ex.Code, message = ex.Message });
-        }
-        catch (InvalidTransferException ex)
-        {
-            return BadRequest(new { code = ex.Code, message = ex.Message });
-        }
-    }
-}
-```
-
-**Step 5:** Register the service in `src/PaymentApp.Api/Program.cs`:
-
-```csharp
-builder.Services.AddScoped<ITransferService, TransferService>();
-```
-
-**Step 6:** Test the transfer:
+**Test the fix:**
 
 ```bash
 # Build and run
@@ -185,9 +123,6 @@ dotnet build && dotnet run --project src/PaymentApp.Api
 curl -X POST http://localhost:5000/v1/payment/transfer \
   -H "Content-Type: application/json" \
   -d '{"payerUserId":1,"payeeUserId":2,"amount":100}'
-
-# Expected response:
-# {"payerUserId":1,"payerNewBalance":900.00,"payeeUserId":2,"payeeNewBalance":1100.00,"transferredAt":"..."}
 
 # Verify in database
 docker-compose exec db psql -U payapp -d payapp \
@@ -777,16 +712,13 @@ rm test.txt
 
 ## What we built
 
-| File | Purpose |
-|------|---------|
-| `Application/DTOs/TransferDtos.cs` | Transfer request/response types |
-| `Application/DTOs/DocumentDtos.cs` | Scan result type |
-| `Application/Services/ITransferService.cs` | Transfer service interface |
-| `Application/Services/IDocumentService.cs` | Document service interface |
-| `Infrastructure/Services/TransferService.cs` | Transfer with `SemaphoreSlim` |
-| `Infrastructure/Services/DocumentService.cs` | CPU scan + I/O store |
-| `Api/Controllers/PaymentController.cs` | Transfer endpoint |
-| `Api/Controllers/DocumentController.cs` | Upload endpoint |
+| File | Change |
+|------|--------|
+| `Infrastructure/Services/PaymentService.cs` | Added `SemaphoreSlim` for race condition fix |
+| `Application/DTOs/DocumentDtos.cs` | New — scan result type |
+| `Application/Interfaces/IDocumentService.cs` | New — document service interface |
+| `Infrastructure/Services/DocumentService.cs` | New — CPU scan + I/O store |
+| `Api/Controllers/DocumentController.cs` | New — upload endpoint |
 
 **Project structure update:**
 
@@ -794,23 +726,23 @@ rm test.txt
 src/PaymentApp.Application/
 ├── DTOs/
 │   ├── AuthDtos.cs
-│   ├── TransferDtos.cs (new)
+│   ├── PaymentDtos.cs
 │   └── DocumentDtos.cs (new)
-└── Services/
+└── Interfaces/
     ├── IAuthService.cs
-    ├── ITransferService.cs (new)
+    ├── IPaymentService.cs
     └── IDocumentService.cs (new)
 
 src/PaymentApp.Infrastructure/
 └── Services/
     ├── AuthService.cs
-    ├── TransferService.cs (new)
+    ├── PaymentService.cs (updated with SemaphoreSlim)
     └── DocumentService.cs (new)
 
 src/PaymentApp.Api/
 └── Controllers/
     ├── AuthController.cs
-    ├── PaymentController.cs (new)
+    ├── PaymentController.cs
     └── DocumentController.cs (new)
 ```
 

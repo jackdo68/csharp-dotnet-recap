@@ -129,7 +129,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Constants;
 using PaymentApp.Domain.Entities;
 using PaymentApp.Domain.Exceptions;
@@ -244,7 +244,7 @@ Update `src/PaymentApp.Api/Controllers/AuthController.cs`:
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Exceptions;
 
 namespace PaymentApp.Api.Controllers;
@@ -314,7 +314,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Entities;
 using PaymentApp.Infrastructure.Data;
 using PaymentApp.Infrastructure.Services;
@@ -335,7 +335,7 @@ builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 
 // Add our services
 builder.Services.AddScoped<IAuthService, AuthService>();
-builder.Services.AddScoped<ITransferService, TransferService>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 
 // Add HTTP client factory (for calling external APIs later)
@@ -405,7 +405,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Exceptions;
 
 namespace PaymentApp.Api.Controllers;
@@ -415,11 +415,11 @@ namespace PaymentApp.Api.Controllers;
 [Authorize]  // All endpoints in this controller require a valid token
 public class PaymentController : ControllerBase
 {
-    private readonly ITransferService _transferService;
+    private readonly IPaymentService _paymentService;
 
-    public PaymentController(ITransferService transferService)
+    public PaymentController(IPaymentService paymentService)
     {
-        _transferService = transferService;
+        _paymentService = paymentService;
     }
 
     [HttpPost("transfer")]
@@ -437,8 +437,12 @@ public class PaymentController : ControllerBase
 
         try
         {
-            var result = await _transferService.TransferAsync(request);
-            return Ok(result);
+            await _paymentService.TransferAsync(
+                request.PayerUserId,
+                request.PayeeUserId,
+                request.Amount);
+
+            return Ok(new TransferResponse("completed", 0, 0));
         }
         catch (UserNotFoundException ex)
         {
@@ -481,7 +485,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Exceptions;
 
 namespace PaymentApp.Api.Controllers;

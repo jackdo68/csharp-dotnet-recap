@@ -165,7 +165,7 @@ When testing, you often need to replace real dependencies with fake ones. This i
 using Moq;
 using Xunit;
 
-public class TransferServiceTests
+public class PaymentServiceTests
 {
     [Fact]
     public async Task TransferAsync_SufficientBalance_Succeeds()
@@ -179,7 +179,7 @@ public class TransferServiceTests
         mockDb.Setup(db => db.GetByIdAsync(2))
               .ReturnsAsync(new User { Id = 2, Balance = 500m });
 
-        var service = new TransferService(mockDb.Object);
+        var service = new PaymentService(mockDb.Object);
 
         // Act
         var result = await service.TransferAsync(1, 2, 100m);

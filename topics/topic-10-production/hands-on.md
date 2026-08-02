@@ -225,7 +225,7 @@ builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 
 // Add our services
 builder.Services.AddScoped<IAuthService, AuthService>();
-builder.Services.AddScoped<ITransferService, TransferService>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 
 // Add HTTP client factory

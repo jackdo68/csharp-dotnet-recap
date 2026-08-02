@@ -82,13 +82,13 @@ public record UserResponse(int Id, string Name, string Email, decimal Balance);
 
 **Solution**
 
-Update `src/PaymentApp.Application/Services/IAuthService.cs`:
+Update `src/PaymentApp.Application/Interfaces/IAuthService.cs`:
 
 ```csharp
 using PaymentApp.Application.DTOs;
 using PaymentApp.Domain.Entities;
 
-namespace PaymentApp.Application.Services;
+namespace PaymentApp.Application.Interfaces;
 
 public interface IAuthService
 {

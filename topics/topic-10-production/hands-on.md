@@ -204,7 +204,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Entities;
 using PaymentApp.Infrastructure.Data;
 using PaymentApp.Infrastructure.Services;

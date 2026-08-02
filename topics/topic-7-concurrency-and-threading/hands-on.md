@@ -147,12 +147,12 @@ namespace PaymentApp.Application.DTOs;
 public record ScanResult(string FileName, int Words, string Sha256, bool Flagged);
 ```
 
-**Step 2:** Add the interface in `src/PaymentApp.Application/Services/IDocumentService.cs`:
+**Step 2:** Add the interface in `src/PaymentApp.Application/Interfaces/IDocumentService.cs`:
 
 ```csharp
 using PaymentApp.Application.DTOs;
 
-namespace PaymentApp.Application.Services;
+namespace PaymentApp.Application.Interfaces;
 
 public interface IDocumentService
 {
@@ -176,7 +176,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Exceptions;
 using PaymentApp.Infrastructure.Data;
 
@@ -242,7 +242,7 @@ public class DocumentService : IDocumentService
 ```csharp
 using Microsoft.AspNetCore.Mvc;
 using PaymentApp.Application.DTOs;
-using PaymentApp.Application.Services;
+using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Exceptions;
 
 namespace PaymentApp.Api.Controllers;

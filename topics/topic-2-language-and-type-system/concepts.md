@@ -248,6 +248,73 @@ readonly record struct FeeRate(decimal Percent);   // value type + value equalit
 
 One footgun worth naming: **mutable structs**. Because every assignment copies, mutating a struct you got *from* somewhere (a list element, a property getter) often mutates a temporary copy that's instantly discarded — the change silently vanishes. That's why the guidance is always "structs should be immutable," and why the example above only mutated local variables.
 
+## Records unpacked — positional vs non-positional
+
+A `record` is just a `class` with auto-generated value equality, `ToString()`, and `with` support. In fact, `record` is shorthand for `record class`:
+
+```csharp
+record User(string Name);         // same as: record class User(string Name);
+record struct Point(int X, int Y); // value-type record (lives on stack)
+```
+
+**Two ways to define a record:**
+
+| Style | Syntax | Instantiation | Properties |
+|-------|--------|---------------|------------|
+| Positional | `record User(string Name)` | By position: `new("Alice")` | Auto-generated `{ get; init; }` |
+| Non-positional | Body with `{ get; set; }` | By name: `new() { Name = "Alice" }` | You define them explicitly |
+
+**Why "positional"?** Because you pass values by their position in the argument list, like function parameters.
+
+**Positional records auto-generate more:**
+
+| Aspect | Positional `(...)` | Non-positional `{ }` |
+|--------|-------------------|---------------------|
+| Properties | Auto-generated `{ get; init; }` | You choose: `get; set;` or `get; init;` |
+| Constructor | Auto-generated with all params | You write it yourself |
+| Deconstruct | Auto-generated | Not generated |
+| Mutability | Immutable by default | Your choice |
+
+```csharp
+// Positional — can deconstruct
+public record User(string Name, string Email);
+var user = new User("Alice", "alice@test.com");
+var (name, email) = user;  // ✅ Deconstruct works
+
+// Non-positional — must define Deconstruct manually
+public record User
+{
+    public string Name { get; set; } = "";
+    public string Email { get; set; } = "";
+}
+var (name, email) = user;  // ❌ error — no Deconstruct
+```
+
+**Primary constructors: records vs classes**
+
+C# 12 added primary constructors to classes too, but they work differently:
+
+```csharp
+// Record: parameters become properties
+public record User(string Name);
+var u = new User("Alice");
+Console.WriteLine(u.Name);  // ✅ Name is a property
+
+// Class: parameters are just constructor params, NOT properties
+public class User(string name)
+{
+    public string Name => name;  // you must create the property yourself
+}
+```
+
+| | `record(...)` | `class(...)` (C# 12+) |
+|---|---------------|----------------------|
+| Parameters become properties | ✅ Yes | ❌ No — just available in class body |
+| Value equality | ✅ Auto-generated | ❌ Must implement yourself |
+| `with` expression | ✅ Works | ❌ Not available |
+
+**Bottom line:** Use positional records for DTOs and immutable data — they're the closest C# gets to TypeScript's object literals.
+
 ## Functions live in a type — there are no free functions
 
 In TS a function can belong to nothing — declare it at the top of a file and call it:

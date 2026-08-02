@@ -366,6 +366,27 @@ This is why `lock` can't contain `await` (CS1996) — the thread that took the l
 
 Once one method is `async`, callers should be too.
 
+### What are `.Result` and `.Wait()`?
+
+These are **blocking** methods on `Task` — they don't exist in TypeScript/JavaScript because there's no way to block the single thread.
+
+| Method | On | Does |
+|--------|-----|------|
+| `.Result` | `Task<T>` | Blocks until complete, returns `T` |
+| `.Wait()` | `Task` | Blocks until complete, returns nothing |
+| `.GetAwaiter().GetResult()` | Both | Same as above, but doesn't wrap exceptions in `AggregateException` |
+
+```csharp
+// These three do the same thing — block the current thread
+var user = _db.GetUserAsync().Result;
+var user = _db.GetUserAsync().GetAwaiter().GetResult();
+_db.SaveChangesAsync().Wait();
+```
+
+**How it works:** Your thread stops and waits. Meanwhile, another thread pool thread completes the async operation. When it's done, your thread wakes up and continues. This is impossible in Node — there's no "another thread" to do the work.
+
+### Why you should almost never use them
+
 ```csharp
 // ❌ BAD — blocks a thread, can deadlock
 public User GetUser()
@@ -387,6 +408,16 @@ public async Task<User> GetUserAsync()
 | Thread blocked | Pool thread sits waiting instead of doing other work |
 | Deadlock risk | In some contexts, the continuation needs the blocked thread → deadlock |
 | Pool exhaustion | Many blocked threads → no threads left → requests queue up |
+
+**In TypeScript, blocking is impossible** — there's no other thread to do the work while you block. `.Result` only exists because C# has multiple threads.
+
+**When `.Result` is acceptable (rare):**
+
+| Context | Why it's OK |
+|---------|-------------|
+| `Main()` before .NET 6 | `Main` couldn't be async (now it can) |
+| Console app one-off scripts | No thread pool to exhaust |
+| Test setup/teardown | Some test frameworks need sync methods |
 
 **The pattern:**
 

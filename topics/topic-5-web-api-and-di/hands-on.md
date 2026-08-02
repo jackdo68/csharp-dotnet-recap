@@ -12,7 +12,7 @@ This is where PaymentApp becomes a real API. We'll add services to the Applicati
 
 ## Exercise 5.1 — Start PostgreSQL
 
-We need a database. Docker Compose makes this identical to what you'd do in Node.
+We need a database. docker-compose makes this identical to what you'd do in Node.
 
 **Task:** Create a docker-compose file and start PostgreSQL.
 
@@ -40,13 +40,13 @@ volumes:
 Start it:
 
 ```bash
-docker compose up -d
+docker-compose up -d
 ```
 
 Verify it's running:
 
 ```bash
-docker compose exec db psql -U payapp -c "SELECT 1;"
+docker-compose exec db psql -U payapp -c "SELECT 1;"
 ```
 
 ---
@@ -165,6 +165,14 @@ public record RegisterRequest(string Name, string Email, string Password);
 
 public record UserResponse(int Id, string Name, string Email);
 ```
+
+**Don't let the parentheses fool you:** `record RegisterRequest(string Name, ...)` looks like a function signature, but those "parameters" become properties. It's shorthand for a class with `{ get; init; }` properties. On the wire, it's a JSON object:
+
+```json
+{ "name": "Alice", "email": "alice@bank.test", "password": "Passw0rd!" }
+```
+
+Not an array of arguments. The parentheses `()` is just C# being terse.
 
 Create `src/PaymentApp.Application/DTOs/PaymentDtos.cs`:
 
@@ -546,7 +554,7 @@ dotnet ef database update \
 Verify the table was created:
 
 ```bash
-docker compose exec db psql -U payapp -c '\d "Users"'
+docker-compose exec db psql -U payapp -c '\d "Users"'
 ```
 
 You should see the Users table with all columns.
@@ -584,7 +592,7 @@ curl -X POST http://localhost:5000/v1/payment/transfer \
   -d '{"payerUserId":1,"payeeUserId":2,"amount":250}'
 
 # Check balances directly in database
-docker compose exec db psql -U payapp -d payapp \
+docker-compose exec db psql -U payapp -d payapp \
   -c 'SELECT "Id", "Name", "Balance" FROM "Users" ORDER BY "Id";'
 ```
 

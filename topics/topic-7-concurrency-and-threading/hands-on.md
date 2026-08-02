@@ -190,7 +190,7 @@ curl -X POST http://localhost:5000/v1/payment/transfer \
 # {"payerUserId":1,"payerNewBalance":900.00,"payeeUserId":2,"payeeNewBalance":1100.00,"transferredAt":"..."}
 
 # Verify in database
-docker compose exec db psql -U payapp -d payapp \
+docker-compose exec db psql -U payapp -d payapp \
   -c 'SELECT "Id", "Name", "Balance" FROM "Users";'
 ```
 
@@ -391,7 +391,7 @@ curl -X POST "http://localhost:5000/v1/document/upload?userId=1" \
 # {"fileName":"flagged.txt","words":7,"sha256":"...","flagged":true}
 
 # Verify in database
-docker compose exec db psql -U payapp -d payapp \
+docker-compose exec db psql -U payapp -d payapp \
   -c 'SELECT "Id", "Name", "DocumentPath" FROM "Users" WHERE "Id" = 1;'
 
 # Clean up
@@ -702,7 +702,7 @@ Make sure Alice and Bob both have $1,000:
 
 ```bash
 # Reset the database
-docker compose down -v && docker compose up -d
+docker-compose down -v && docker-compose up -d
 sleep 2
 
 # Apply migrations and seed data
@@ -731,7 +731,7 @@ done
 wait
 
 # Check final balances
-docker compose exec db psql -U payapp -d payapp \
+docker-compose exec db psql -U payapp -d payapp \
   -c 'SELECT "Id", "Name", "Balance" FROM "Users";'
 ```
 

@@ -213,33 +213,33 @@ Docker creates a network where services can find each other by name. `db` is the
 
 ```bash
 # Start everything (builds if needed)
-docker compose up
+docker-compose up
 
 # Start in background
-docker compose up -d
+docker-compose up -d
 
 # View logs
-docker compose logs api
-docker compose logs db
+docker-compose logs api
+docker-compose logs db
 
 # Stop everything
-docker compose down
+docker-compose down
 
 # Stop and remove data
-docker compose down -v
+docker-compose down -v
 ```
 
 ### Common commands
 
 | Command | What it does |
 |---------|--------------|
-| `docker compose up` | Start all services |
-| `docker compose up -d` | Start in background |
-| `docker compose down` | Stop all services |
-| `docker compose down -v` | Stop and delete volumes (data) |
-| `docker compose logs <service>` | View logs for a service |
-| `docker compose exec db psql -U payapp -d payapp` | Run a command in a container |
-| `docker compose build` | Rebuild images |
+| `docker-compose up` | Start all services |
+| `docker-compose up -d` | Start in background |
+| `docker-compose down` | Stop all services |
+| `docker-compose down -v` | Stop and delete volumes (data) |
+| `docker-compose logs <service>` | View logs for a service |
+| `docker-compose exec db psql -U payapp -d payapp` | Run a command in a container |
+| `docker-compose build` | Rebuild images |
 
 ---
 
@@ -319,7 +319,7 @@ This makes builds faster and images smaller.
 
 | Aspect | Development | Production |
 |--------|-------------|------------|
-| Database | `docker compose up db` | Managed service (RDS, Cloud SQL) |
+| Database | `docker-compose up db` | Managed service (RDS, Cloud SQL) |
 | Config | `appsettings.Development.json` | Environment variables |
 | Secrets | Plain text in config | Secret manager (Vault, AWS Secrets) |
 | JWT key | Same for everyone | Rotated, stored securely |

@@ -18,7 +18,7 @@ Let's verify what EF Core actually created in PostgreSQL.
 
 ```bash
 # List all tables
-docker compose exec db psql -U payapp -d payapp -c '\dt'
+docker-compose exec db psql -U payapp -d payapp -c '\dt'
 
 # Expected output:
 #  Schema |        Name              | Type  | Owner
@@ -27,7 +27,7 @@ docker compose exec db psql -U payapp -d payapp -c '\dt'
 #  public | __EFMigrationsHistory    | table | payapp
 
 # Describe the Users table
-docker compose exec db psql -U payapp -d payapp -c '\d "Users"'
+docker-compose exec db psql -U payapp -d payapp -c '\d "Users"'
 
 # Expected output shows:
 #  Column       |            Type             | Nullable
@@ -388,7 +388,7 @@ Concepts explained why check-then-insert has a race condition. Let's see the dat
 
 ```bash
 # Try to register duplicate email directly in SQL
-docker compose exec db psql -U payapp -d payapp -c \
+docker-compose exec db psql -U payapp -d payapp -c \
   "INSERT INTO \"Users\" (\"Name\", \"Email\", \"PasswordHash\", \"Balance\", \"CreatedAt\")
    VALUES ('Duplicate', 'alice@bank.test', 'hash', 1000, NOW());"
 
@@ -457,7 +457,7 @@ Test that transfers still work:
 
 ```bash
 # Check current balances
-docker compose exec db psql -U payapp -d payapp \
+docker-compose exec db psql -U payapp -d payapp \
   -c 'SELECT "Id", "Name", "Balance" FROM "Users" ORDER BY "Id";'
 ```
 

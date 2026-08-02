@@ -22,11 +22,11 @@ Install the **C# Dev Kit** extension (publisher: Microsoft) from the Extensions 
 
 ## 3. Docker (needed from Topic 6 on)
 
-Topics 6–9 run PostgreSQL — and eventually the app itself — in containers via `docker compose`. If you don't already have it:
+Topics 6–9 run PostgreSQL — and eventually the app itself — in containers via `docker-compose`. If you don't already have it:
 
 ```bash
 brew install --cask docker     # Docker Desktop; or use OrbStack/colima if you prefer
-docker compose version         # verify
+docker-compose version         # verify
 ```
 
 Nothing to configure now; Topic 6 supplies the compose file.

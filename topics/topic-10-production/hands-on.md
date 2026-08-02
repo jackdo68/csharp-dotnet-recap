@@ -320,10 +320,10 @@ dotnet add src/PaymentApp.Api package AspNetCore.HealthChecks.NpgSql
 
 ```bash
 # Build and start everything
-docker compose up --build
+docker-compose up --build
 
 # Or run in background
-docker compose up --build -d
+docker-compose up --build -d
 ```
 
 You should see:
@@ -345,7 +345,7 @@ curl -X POST http://localhost:8080/v1/auth/register \
   -d '{"name":"Alice","email":"alice@bank.test","password":"Passw0rd!"}'
 
 # Check the database
-docker compose exec db psql -U payapp -d payapp \
+docker-compose exec db psql -U payapp -d payapp \
   -c 'SELECT "Id", "Name", "Email", "Balance" FROM "Users";'
 ```
 
@@ -357,7 +357,7 @@ docker compose exec db psql -U payapp -d payapp \
 
 **Explanation**
 
-When you run `docker compose up`, Docker creates a private network. Each service gets a hostname matching its name:
+When you run `docker-compose up`, Docker creates a private network. Each service gets a hostname matching its name:
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -400,7 +400,7 @@ This is why we use `Host=db` in the connection string.
 
 ```bash
 # Make sure everything is running
-docker compose up -d
+docker-compose up -d
 
 # Wait for it to start
 sleep 5
@@ -434,7 +434,7 @@ curl -s -X POST http://localhost:8080/v1/payment/transfer \
 
 # 5. Check balances
 echo -e "\n\n=== Check Balances ==="
-docker compose exec db psql -U payapp -d payapp \
+docker-compose exec db psql -U payapp -d payapp \
   -c 'SELECT "Id", "Name", "Balance" FROM "Users";'
 ```
 
@@ -470,16 +470,16 @@ Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzd...
 
 ```bash
 # View all logs
-docker compose logs
+docker-compose logs
 
 # View only API logs
-docker compose logs api
+docker-compose logs api
 
 # Follow logs in real-time (like tail -f)
-docker compose logs -f api
+docker-compose logs -f api
 
 # View last 50 lines
-docker compose logs --tail 50 api
+docker-compose logs --tail 50 api
 ```
 
 ---
@@ -492,13 +492,13 @@ docker compose logs --tail 50 api
 
 ```bash
 # Stop containers (keeps data)
-docker compose down
+docker-compose down
 
 # Stop containers AND delete data
-docker compose down -v
+docker-compose down -v
 
 # Remove built images too
-docker compose down -v --rmi all
+docker-compose down -v --rmi all
 ```
 
 ---
@@ -511,10 +511,10 @@ docker compose down -v --rmi all
 
 ```bash
 # Clean start
-docker compose down -v
+docker-compose down -v
 
 # Build and run
-docker compose up --build -d
+docker-compose up --build -d
 
 # Wait for startup
 sleep 10
@@ -523,7 +523,7 @@ sleep 10
 curl http://localhost:8080/health
 
 # Clean up
-docker compose down
+docker-compose down
 ```
 
 ---

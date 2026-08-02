@@ -114,6 +114,11 @@ public async Task<ActionResult<ScanResult>> Upload(int userId, IFormFile file)
 
 ### Node reflex to unlearn
 
+| | TypeScript/Node | C# |
+|---|----------------|-----|
+| `await` on I/O | OS does it, event loop waits | OS does it, thread released |
+| `await` on CPU work | No other thread exists | `Task.Run` → another pool thread |
+
 In Node, CPU work blocks *the* event loop — you must offload to `worker_threads`.
 
 In .NET:

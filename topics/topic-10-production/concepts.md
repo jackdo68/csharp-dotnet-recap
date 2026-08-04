@@ -207,6 +207,79 @@ Docker creates a network where services can find each other by name. `db` is the
 
 ---
 
+## Calling an external payment processor
+
+Back in Topic 7 we protected the transfer with a `static SemaphoreSlim` — a **mutex inside one process**. That is correct for exactly one API instance. But the whole point of Docker + compose is that scaling out is trivial, and the moment you run a second replica the guarantee evaporates:
+
+```
+   Replica A            Replica B
+ ┌───────────┐        ┌───────────┐
+ │ _gate  #A │        │ _gate  #B │   ← two different semaphore objects!
+ └─────┬─────┘        └─────┬─────┘
+       └──────────┬─────────┘
+                  ▼
+            one shared DB      ← both read Balance=1000, both subtract 100,
+                                 the race Topic 7 "fixed" is back
+```
+
+Each replica has its **own** `_gate`. A semaphore only coordinates threads *within its own process* — it knows nothing about the other container. Topic 7 flagged exactly this and pointed here for the real fix.
+
+### The fix: make the write atomic in the database
+
+The durable fix is to stop doing read-check-write in application memory and let the **database** do it in one indivisible statement:
+
+```sql
+UPDATE "Users"
+   SET "Balance" = "Balance" - @amount
+ WHERE "Id" = @userId
+   AND "Balance" >= @amount      -- the guard: only succeeds if funds exist
+ RETURNING "Balance";
+```
+
+There is no window between the check and the write — Postgres evaluates the `WHERE` and applies the `SET` as a single locked row operation. Run it from 1 replica or 50 and it stays correct, with **no application lock at all**. This is the "database row lock / conditional update" Topic 7 promised.
+
+### Why a separate service?
+
+In real payment systems, the code that actually moves money is usually a **dedicated, narrowly-scoped service** (often PCI-scoped, separately audited, deployed on its own cadence) that everything else calls over HTTP. PaymentApp models that with a tiny **payment-processor** that owns the balance mutation and exposes two endpoints:
+
+| Endpoint | Body | Returns | What it does |
+|----------|------|---------|--------------|
+| `POST /v1/withdraw` | `{ userId, amount }` | `{ transactionId, balance }` | The atomic conditional `UPDATE` above. `400` if insufficient funds |
+| `POST /v1/deposit`  | `{ userId, amount }` | `{ transactionId, balance }` | Atomic `UPDATE ... SET "Balance" = "Balance" + amount` |
+
+It happens to be a ~40-line Node/Express service — a fitting bookend, since that's the world you came from. Nothing about the pattern is Node-specific; it's just a service that owns one job. Each successful call returns a `transactionId` — the **external system's** reference for that movement, which PaymentApp stores on its ledger.
+
+### The .NET side: a typed client over `IHttpClientFactory`
+
+PaymentApp calls the processor with a **named** `HttpClient` (Topic 8's `IHttpClientFactory`), with the base address coming from config:
+
+```csharp
+builder.Services.AddHttpClient("processor", client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["PaymentProcessor:BaseUrl"]!);
+});
+```
+
+This is where the **"localhost lie" bites again**: in compose the base URL is `http://processor:4000` — the **service name**, not `localhost`. Inside the api container, `localhost` is the api container itself; the processor lives at hostname `processor`.
+
+Your mental anchor is `fetch`/`axios` for `HttpClient`, and a named client is just a pre-configured axios instance (`axios.create({ baseURL })`) that DI hands you already wired.
+
+### PaymentApp as the merchant: the Transaction ledger
+
+The processor owns *balances*; PaymentApp owns the *record*. It sits in the middle as the merchant and writes a `Transaction` row per processor call — so one transfer produces **two** ledger rows (a `Withdraw` leg for the payer, a `Deposit` leg for the payee) sharing one `TransferId`. Each row runs a small lifecycle:
+
+```
+Pending ──(processor answers)──▶ Successful | Failed
+```
+
+The row is created `Pending` *before* the HTTP call (so the intent is durable), then flipped to `Successful`/`Failed` once the processor responds — stamped with the `ExternalTransactionId` it returned and the raw reply kept verbatim in a `jsonb` column for audit. Enums (`Type`, `Status`) are stored as **text** (`HasConversion<string>()`) so `psql` reads `Pending`/`Withdraw` and reordering the enum can't silently change stored meaning. This "write intent, then confirm" shape is the seed of the outbox pattern (Topic 12).
+
+### Honest tradeoff — this fixes the balance race, not cross-account atomicity
+
+A transfer is now **two** calls: withdraw from the payer, then deposit to the payee. Each call is atomic on its own row and both survive multiple replicas — but the *pair* is not one transaction. If the deposit fails after the withdraw succeeds, money has left the payer and not arrived. PaymentApp keeps this simple (it compensates by refunding the payer on failure), but the production-grade answer is **idempotency keys + a compensating transaction, or the outbox pattern**, so the two steps reliably reconcile. That's exactly the territory Topic 12 covers.
+
+---
+
 ## Running with Docker
 
 ### Build and run with compose
@@ -324,6 +397,7 @@ This makes builds faster and images smaller.
 | Secrets | Plain text in config | Secret manager (Vault, AWS Secrets) |
 | JWT key | Same for everyone | Rotated, stored securely |
 | Migrations | Auto on startup | CI/CD pipeline |
+| Transfer safety | In-process `SemaphoreSlim` (1 replica) | External processor + atomic DB update (N replicas) |
 | Logging | Console | Structured logging to a service |
 
 ---
@@ -335,3 +409,5 @@ This makes builds faster and images smaller.
 - "Environment variables override config files. I use `ConnectionStrings__PaymentDb` in compose to override `appsettings.json`."
 - "The 'localhost lie' — inside a container, localhost means the container itself, not your machine. Use service names instead."
 - "For migrations, I apply them in CI/CD before deploying, not on app startup, to avoid race conditions with multiple replicas."
+- "In-process locks like `SemaphoreSlim` don't survive horizontal scaling — each replica has its own lock. I moved the money mutation behind a payment-processor service that does an atomic conditional `UPDATE ... WHERE Balance >= amount`, which stays correct with any number of replicas."
+- "I call the processor through a named `HttpClient` with the base URL from config — `http://processor:4000`, the compose service name, not localhost."

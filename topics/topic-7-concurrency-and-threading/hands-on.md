@@ -682,7 +682,12 @@ Make sure Alice and Bob both have $1,000:
 docker-compose down -v && docker-compose up -d
 sleep 2
 
-# Apply migrations and seed data
+# Apply migrations (creates the schema — the -v wipe dropped it; Topic 7's app doesn't auto-migrate)
+dotnet ef database update \
+  --project src/PaymentApp.Infrastructure \
+  --startup-project src/PaymentApp.Api
+
+# Start the API (seed data comes from the register calls below)
 dotnet run --project src/PaymentApp.Api &
 sleep 5
 

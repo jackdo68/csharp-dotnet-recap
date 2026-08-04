@@ -51,8 +51,8 @@ Everything ties to **one running example**: the **PaymentApp**. You start buildi
 | **4** | Errors & Exceptions | Domain exceptions, Result pattern |
 | **5** | Web API + DI + EF Core | Controllers, DI wiring, Postgres, migrations, register endpoint |
 | **6** | EF Core Deep Dive | Change tracking internals, advanced queries, transactions |
-| **7** | Concurrency & Threading | Transfer endpoint with proper locking |
-| **8** | .NET Standard Library | Document upload (File, Stream, JSON, HttpClient) |
+| **7** | Concurrency & Threading | Transfer endpoint with proper locking + document upload (CPU-bound scan) |
+| **8** | .NET Standard Library | Document metadata (JSON), streaming download, account statement, external HttpClient (FX rates) |
 | **9** | Authentication | Login, JWT, `[Authorize]`, ownership checks |
 | **10** | Production | Docker, health checks, configuration |
 | **11** | Testing | Unit, integration, functional tests |

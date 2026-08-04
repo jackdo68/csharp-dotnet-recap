@@ -317,6 +317,7 @@ using Microsoft.IdentityModel.Tokens;
 using PaymentApp.Application.Interfaces;
 using PaymentApp.Domain.Entities;
 using PaymentApp.Infrastructure.Data;
+using PaymentApp.Infrastructure.Clients;
 using PaymentApp.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -338,8 +339,12 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 
-// Add HTTP client factory (for calling external APIs later)
-builder.Services.AddHttpClient();
+// HTTP client for the FX service (Topic 8): named client + typed wrapper
+builder.Services.AddHttpClient("fx", client =>
+{
+    client.BaseAddress = new Uri("https://api.frankfurter.app/");
+});
+builder.Services.AddScoped<ExchangeRateClient>();
 
 // ============================================
 // JWT Authentication setup
@@ -492,7 +497,7 @@ namespace PaymentApp.Api.Controllers;
 
 [ApiController]
 [Route("v1/document")]
-[Authorize]  // Requires a valid token
+[Authorize]  // Every endpoint here requires a valid token
 public class DocumentController : ControllerBase
 {
     private readonly IDocumentService _documentService;
@@ -502,44 +507,73 @@ public class DocumentController : ControllerBase
         _documentService = documentService;
     }
 
-    /// <summary>
-    /// Upload a document. The user ID comes from the token, not the URL.
-    /// </summary>
-    [HttpPost("upload")]
-    public async Task<ActionResult<ScanResult>> Upload(IFormFile file)
-    {
-        // Get user ID from the token (not from the request!)
-        var userId = int.Parse(User.FindFirstValue("sub")!);
+    // The user ID always comes from the token, never from the request.
+    private int CurrentUserId => int.Parse(User.FindFirstValue("sub")!);
 
-        // Validate file type
+    /// <summary>Upload a document (Topic 7/8). User ID comes from the token.</summary>
+    [HttpPost("upload")]
+    public async Task<ActionResult<DocumentMetadata>> Upload(IFormFile file)
+    {
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
         if (ext != ".txt")
             return BadRequest(new { error = "Only .txt files are accepted." });
 
-        // Read the uploaded bytes
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms);
         var bytes = ms.ToArray();
 
-        // Scan the document (CPU-bound, so use Task.Run)
+        // CPU-bound scan on a pool thread (Topic 7)
         var result = await Task.Run(() => _documentService.Scan(file.FileName, bytes));
 
-        // Store on disk and update user
         try
         {
-            await _documentService.StoreAsync(userId, file.FileName, bytes);
+            // Store the file + JSON metadata sidecar (Topic 8), return the metadata
+            var meta = await _documentService.StoreAsync(CurrentUserId, file.FileName, bytes, result);
+            return Ok(meta);
         }
         catch (UserNotFoundException ex)
         {
             return NotFound(new { code = ex.Code, message = ex.Message });
         }
+    }
 
-        return Ok(result);
+    /// <summary>Download your stored document (Topic 8), streamed back.</summary>
+    [HttpGet("download")]
+    public async Task<IActionResult> Download()
+    {
+        try
+        {
+            var (content, meta) = await _documentService.OpenAsync(CurrentUserId);
+            return File(content, "application/octet-stream", meta.OriginalName);
+        }
+        catch (UserNotFoundException ex)
+        {
+            return NotFound(new { code = ex.Code, message = ex.Message });
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Your account statement (Topic 8), optionally in another currency.</summary>
+    [HttpGet("statement")]
+    public async Task<IActionResult> Statement(string? currency = null)
+    {
+        try
+        {
+            var text = await _documentService.BuildStatementAsync(CurrentUserId, currency);
+            return Content(text, "text/plain");
+        }
+        catch (UserNotFoundException ex)
+        {
+            return NotFound(new { code = ex.Code, message = ex.Message });
+        }
     }
 }
 ```
 
-**Notice:** The endpoint no longer takes `userId` as a parameter. It gets it from the token instead, so users can only upload to their own account.
+**Notice:** None of these endpoints take `userId` as a parameter anymore — they all read it from the token via `CurrentUserId`, so users can only ever touch their own account.
 
 ---
 

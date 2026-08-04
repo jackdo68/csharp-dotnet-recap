@@ -2,746 +2,553 @@
 
 > **The PaymentApp build:** Solution structure → Domain models → Runtime utilities → Exceptions → Web API + EF Core → EF Core deep dive → Transfer endpoint + Document upload → **.NET Standard Library** → Authentication → Production
 
-This topic doesn't add new features to PaymentApp. Instead, we practice the common .NET tools (HttpClient, JSON, files, etc.) that you'll use in every .NET project.
+Topic 7 built document **upload** (the CPU-bound scan + storing the file). This topic exercises the everyday .NET standard library — JSON, files, streams, strings, dates, collections, and `HttpClient` — by **extending that real feature** rather than writing throwaway scripts. By the end, PaymentApp can attach JSON metadata to a document, stream it back to the caller, print an account statement, and call an external service.
 
 **Prerequisites:** Complete Topic 7 hands-on (working transfer and document upload).
 
+> **Why no `test-*.cs` scripts?** Every tool here is learned on the actual app. Isolated snippets are easy to forget; a feature you can `curl` sticks. The Node/TS ↔ .NET API mappings live in this topic's **Concepts** page — keep it open as a reference while you build.
+
 ---
 
-## Exercise 8.1 — Make HTTP calls with HttpClient
+## Exercise 8.1 — Attach JSON metadata to an uploaded document
 
-**Task:** Create a script that fetches data from a public API.
+**Task:** When a document is stored, also write a `.meta.json` sidecar file next to it — practising `System.Text.Json`, `File`, `Path`, and `DateTime` on real data.
 
 **Solution**
 
-Create `test-http.cs`:
+**Step 1:** Add a `DocumentMetadata` record to `src/PaymentApp.Application/DTOs/DocumentDtos.cs` (alongside the existing `ScanResult`):
 
 ```csharp
-#!/usr/bin/env dotnet
+namespace PaymentApp.Application.DTOs;
 
-using System.Text.Json;
+public record ScanResult(string FileName, int Words, string Sha256, bool Flagged);
 
-// Create an HttpClient (a tool for making web requests)
-var client = new HttpClient();
-
-// Fetch a random joke from a public API
-Console.WriteLine("Fetching a random joke...\n");
-
-var response = await client.GetAsync("https://official-joke-api.appspot.com/random_joke");
-
-// Check if the request succeeded
-if (response.IsSuccessStatusCode)
-{
-    // Read the response body as text
-    var json = await response.Content.ReadAsStringAsync();
-    Console.WriteLine($"Raw JSON: {json}\n");
-
-    // Parse the JSON into a C# object
-    var joke = JsonSerializer.Deserialize<Joke>(json);
-    Console.WriteLine($"Setup: {joke.setup}");
-    Console.WriteLine($"Punchline: {joke.punchline}");
-}
-else
-{
-    Console.WriteLine($"Request failed with status: {response.StatusCode}");
-}
-
-// Define the shape of the joke data
-// (The API returns JSON with lowercase property names)
-record Joke(string setup, string punchline);
+// NEW — what we persist next to the stored file
+public record DocumentMetadata(
+    string OriginalName,
+    string StoredName,
+    long SizeBytes,
+    string Sha256,
+    int Words,
+    bool Flagged,
+    DateTime UploadedAtUtc);
 ```
 
-Run it:
+**Step 2:** Update `IDocumentService` (`src/PaymentApp.Application/Interfaces/IDocumentService.cs`) — `StoreAsync` now takes the scan result and returns the metadata it wrote:
+
+```csharp
+using PaymentApp.Application.DTOs;
+
+namespace PaymentApp.Application.Interfaces;
+
+public interface IDocumentService
+{
+    ScanResult Scan(string fileName, byte[] content);
+
+    // CHANGED: now records metadata and returns it
+    Task<DocumentMetadata> StoreAsync(int userId, string fileName, byte[] content, ScanResult scan);
+}
+```
+
+**Step 3:** Update `DocumentService` (`src/PaymentApp.Infrastructure/Services/DocumentService.cs`). Add the JSON options fields and rewrite `StoreAsync`:
+
+```csharp
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using PaymentApp.Application.DTOs;
+using PaymentApp.Application.Interfaces;
+using PaymentApp.Domain.Exceptions;
+using PaymentApp.Infrastructure.Data;
+
+namespace PaymentApp.Infrastructure.Services;
+
+public class DocumentService : IDocumentService
+{
+    private readonly PaymentDbContext _db;
+    private readonly string _uploadDir;
+
+    // Write pretty, camelCase JSON (readable when you `cat` the sidecar).
+    private static readonly JsonSerializerOptions _jsonWrite = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+    };
+
+    // Web defaults are camelCase + case-insensitive — perfect for reading it back.
+    private static readonly JsonSerializerOptions _jsonRead = new(JsonSerializerDefaults.Web);
+
+    public DocumentService(PaymentDbContext db)
+    {
+        _db = db;
+        _uploadDir = Path.Combine(AppContext.BaseDirectory, "uploads");
+        Directory.CreateDirectory(_uploadDir);
+    }
+
+    // Scan(...) is unchanged from Topic 7 — omitted here for brevity.
+    public ScanResult Scan(string fileName, byte[] content)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(content));
+        var text = Encoding.UTF8.GetString(content);
+        double signal = 0;
+        for (int i = 0; i < 5_000_000; i++) signal += Math.Sqrt(i);
+        var words = text.Split(default(char[]?), StringSplitOptions.RemoveEmptyEntries).Length;
+        var flagged = text.Contains("fraud", StringComparison.OrdinalIgnoreCase);
+        return new ScanResult(fileName, words, hash, flagged);
+    }
+
+    public async Task<DocumentMetadata> StoreAsync(int userId, string fileName, byte[] content, ScanResult scan)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId)
+            ?? throw new UserNotFoundException(userId);
+
+        var storedName = $"{userId}_{Guid.NewGuid():N}{Path.GetExtension(fileName)}";
+        var filePath = Path.Combine(_uploadDir, storedName);
+        await File.WriteAllBytesAsync(filePath, content);   // I/O: the file itself
+
+        // Build metadata and serialize it to a sidecar: "<storedName>.meta.json"
+        var meta = new DocumentMetadata(
+            OriginalName: fileName,
+            StoredName: storedName,
+            SizeBytes: content.LongLength,
+            Sha256: scan.Sha256,
+            Words: scan.Words,
+            Flagged: scan.Flagged,
+            UploadedAtUtc: DateTime.UtcNow);       // always store timestamps in UTC
+
+        var metaPath = filePath + ".meta.json";
+        await File.WriteAllTextAsync(metaPath, JsonSerializer.Serialize(meta, _jsonWrite));
+
+        user.DocumentPath = storedName;
+        await _db.SaveChangesAsync();
+        return meta;
+    }
+}
+```
+
+**Step 4:** Update the controller's `Upload` action (`src/PaymentApp.Api/Controllers/DocumentController.cs`) to pass the scan result through:
+
+```csharp
+// I/O: read the uploaded bytes (unchanged)
+using var ms = new MemoryStream();
+await file.CopyToAsync(ms);
+var bytes = ms.ToArray();
+
+// CPU: scan on a pool thread (unchanged)
+var result = await Task.Run(() => _documentService.Scan(file.FileName, bytes));
+
+// I/O: store the file AND its metadata; return the metadata to the caller
+try
+{
+    var meta = await _documentService.StoreAsync(userId, file.FileName, bytes, result);
+    return Ok(meta);
+}
+catch (UserNotFoundException ex)
+{
+    return NotFound(new { code = ex.Code, message = ex.Message });
+}
+```
+
+**Test it:**
 
 ```bash
-dotnet run test-http.cs
+echo "This is a real document with some content." > test.txt
+curl -X POST "http://localhost:5000/v1/document/upload?userId=1" -F "file=@test.txt"
+
+# Inspect the sidecar the service just wrote (path printed in the response's storedName):
+cat src/PaymentApp.Api/bin/Debug/net10.0/uploads/1_*.meta.json
+rm test.txt
+```
+
+**Expected sidecar:**
+
+```json
+{
+  "originalName": "test.txt",
+  "storedName": "1_9f8c....txt",
+  "sizeBytes": 43,
+  "sha256": "A1B2...",
+  "words": 8,
+  "flagged": false,
+  "uploadedAtUtc": "2026-08-04T09:15:22.13Z"
+}
+```
+
+**What this taught:**
+
+| Tool | Where it showed up |
+|------|--------------------|
+| `JsonSerializer.Serialize(obj, options)` | Writing the sidecar |
+| `JsonNamingPolicy.CamelCase` / `WriteIndented` | `camelCase`, human-readable output |
+| `File.WriteAllTextAsync` / `WriteAllBytesAsync` | Sidecar text + the file bytes |
+| `Path.Combine`, string concat for `.meta.json` | Building paths portably |
+| `DateTime.UtcNow` | Storing the timestamp in UTC |
+
+**Interview talking point:** "I keep a JSON sidecar per file so the metadata travels with the document and stays human-readable. I serialize with camelCase + indentation for writing, and read back with `JsonSerializerDefaults.Web` so casing round-trips without extra config."
+
+---
+
+## Exercise 8.2 — Download the document with a stream
+
+**Task:** Add `GET /v1/document/download` that reads the stored file **as a stream** (never buffering it fully in memory) and returns it, using the sidecar to restore the original filename.
+
+**Solution**
+
+**Step 1:** Add `OpenAsync` to `IDocumentService`:
+
+```csharp
+// Returns an open read-stream for the user's document + its metadata.
+Task<(Stream Content, DocumentMetadata Meta)> OpenAsync(int userId);
+```
+
+**Step 2:** Implement it in `DocumentService`:
+
+```csharp
+public async Task<(Stream Content, DocumentMetadata Meta)> OpenAsync(int userId)
+{
+    var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId)
+        ?? throw new UserNotFoundException(userId);
+
+    if (string.IsNullOrEmpty(user.DocumentPath))
+        throw new InvalidOperationException($"User {userId} has no document on file.");
+
+    var filePath = Path.Combine(_uploadDir, user.DocumentPath);
+    if (!File.Exists(filePath))
+        throw new FileNotFoundException("Stored document is missing.", user.DocumentPath);
+
+    // Read the sidecar back into the record (JSON -> object)
+    var metaPath = filePath + ".meta.json";
+    var meta = JsonSerializer.Deserialize<DocumentMetadata>(
+        await File.ReadAllTextAsync(metaPath), _jsonRead)!;
+
+    // Open a READ STREAM — the framework streams these bytes to the client and
+    // disposes the stream for us. A 2 GB file uses a small buffer, not 2 GB of RAM.
+    Stream content = File.OpenRead(filePath);
+    return (content, meta);
+}
+```
+
+**Step 3:** Add the `Download` action to `DocumentController`:
+
+```csharp
+[HttpGet("download")]
+public async Task<IActionResult> Download(int userId)
+{
+    try
+    {
+        var (content, meta) = await _documentService.OpenAsync(userId);
+
+        // File(...) returns a FileStreamResult: it streams `content` to the
+        // response and sets Content-Disposition so the browser downloads it.
+        return File(content, "application/octet-stream", meta.OriginalName);
+    }
+    catch (UserNotFoundException ex)
+    {
+        return NotFound(new { code = ex.Code, message = ex.Message });
+    }
+    catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException)
+    {
+        return NotFound(new { error = ex.Message });
+    }
+}
+```
+
+**Test it:**
+
+```bash
+# -OJ = save to a file, using the server's Content-Disposition filename
+curl -OJ "http://localhost:5000/v1/document/download?userId=1"
+# -> saves "test.txt" (the ORIGINAL name, restored from the sidecar)
+```
+
+**Buffer vs. stream — the point of this exercise:**
+
+| Approach | Memory used | When |
+|----------|-------------|------|
+| `File.ReadAllBytesAsync` then return bytes | Whole file in RAM | Small files only |
+| `File.OpenRead` + `File(stream, ...)` | One small buffer | Any size — the default for downloads |
+
+**Interview talking point:** "For file downloads I return a `FileStreamResult` from `File.OpenRead`, not the whole byte array — the framework streams it and disposes the stream, so memory stays flat regardless of file size. That's the `Stream` ≈ Node `Readable` idea: data flows through, it isn't all held at once."
+
+---
+
+## Exercise 8.3 — Generate an account statement
+
+**Task:** Add `GET /v1/document/statement` that builds a plain-text statement — the natural home for `string` formatting, `StringBuilder`, `DateTime`, and collections.
+
+**Solution**
+
+**Step 1:** Add to `IDocumentService`:
+
+```csharp
+Task<string> BuildStatementAsync(int userId, string? currency = null);
+```
+
+(The `currency` parameter is unused until Exercise 8.4 — leave it in the signature now.)
+
+**Step 2:** Implement it in `DocumentService` (add `using System.Globalization;` at the top):
+
+```csharp
+public async Task<string> BuildStatementAsync(int userId, string? currency = null)
+{
+    var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId)
+        ?? throw new UserNotFoundException(userId);
+
+    var usd = CultureInfo.GetCultureInfo("en-US");
+
+    // A small collection of label/value rows — iterated to render the body.
+    var lines = new List<(string Label, string Value)>
+    {
+        ("Account holder", user.Name),
+        ("Email", user.Email),
+        ("Current balance", user.Balance.ToString("C", usd)),   // $1,000.00
+        ("Document on file", string.IsNullOrEmpty(user.DocumentPath) ? "(none)" : user.DocumentPath),
+    };
+
+    // StringBuilder: build the report with one buffer, not string + string + ...
+    var sb = new StringBuilder();
+    sb.AppendLine("=== PaymentApp Account Statement ===");
+    sb.AppendLine($"Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+    sb.AppendLine();
+    foreach (var (label, value) in lines)
+        sb.AppendLine($"{label,-18}: {value}");   // {,-18} left-pads the label to 18 cols
+    sb.AppendLine();
+    sb.AppendLine("Thank you for banking with PaymentApp.");
+    return sb.ToString();
+}
+```
+
+**Step 3:** Add the controller action:
+
+```csharp
+[HttpGet("statement")]
+public async Task<IActionResult> Statement(int userId, string? currency = null)
+{
+    try
+    {
+        var text = await _documentService.BuildStatementAsync(userId, currency);
+        return Content(text, "text/plain");
+    }
+    catch (UserNotFoundException ex)
+    {
+        return NotFound(new { code = ex.Code, message = ex.Message });
+    }
+}
+```
+
+**Test it:**
+
+```bash
+curl "http://localhost:5000/v1/document/statement?userId=1"
 ```
 
 **Expected output:**
 
 ```
-Fetching a random joke...
+=== PaymentApp Account Statement ===
+Generated: 2026-08-04 09:20:41 UTC
 
-Raw JSON: {"type":"general","setup":"Why did the coffee file a police report?","punchline":"It got mugged.","id":123}
+Account holder    : Alice
+Email             : alice@bank.test
+Current balance   : $1,000.00
+Document on file  : 1_9f8c....txt
 
-Setup: Why did the coffee file a police report?
-Punchline: It got mugged.
+Thank you for banking with PaymentApp.
 ```
 
-**What's happening:**
+**What this taught:**
 
-| Step | What it does |
-|------|--------------|
-| `new HttpClient()` | Creates a tool for making web requests |
-| `GetAsync(url)` | Sends a GET request (fetches data from the URL) |
-| `response.IsSuccessStatusCode` | Checks if the request succeeded (status 200-299) |
-| `ReadAsStringAsync()` | Reads the response body as text |
-| `JsonSerializer.Deserialize<T>()` | Converts JSON text into a C# object |
+| Tool | Where it showed up |
+|------|--------------------|
+| `StringBuilder` + `AppendLine` | Building the multi-line report efficiently |
+| `{value:C}` / `{label,-18}` | Currency formatting + alignment in interpolation |
+| `DateTime.UtcNow:yyyy-MM-dd HH:mm:ss` | Formatting a timestamp |
+| `List<(string, string)>` + `foreach` | Collecting and iterating line items |
 
-**Clean up:**
-
-```bash
-rm test-http.cs
-```
+**Interview talking point:** "For any string built in a loop I reach for `StringBuilder` — `+=` allocates a new string each iteration. And composite format items like `{label,-18}` handle alignment without manual padding."
 
 ---
 
-## Exercise 8.2 — Work with JSON
+## Exercise 8.4 — Call an external service with a typed HttpClient
 
-**Task:** Practice converting between JSON and C# objects.
+This is the one that matters most: a **real** outbound call from PaymentApp, using the exact `IHttpClientFactory` + named-client pattern that Topic 10 reuses for the payment processor. We'll fetch a live exchange rate and show the balance in another currency on the statement.
 
-**Solution**
-
-Create `test-json.cs`:
-
-```csharp
-#!/usr/bin/env dotnet
-
-using System.Text.Json;
-
-// --- Part 1: Convert C# object to JSON ---
-Console.WriteLine("=== C# to JSON ===\n");
-
-var user = new User("Alice", "alice@example.com", 30);
-var json = JsonSerializer.Serialize(user);
-Console.WriteLine($"Default: {json}");
-// Output: {"Name":"Alice","Email":"alice@example.com","Age":30}
-
-// With pretty printing (easier to read)
-var options = new JsonSerializerOptions { WriteIndented = true };
-var prettyJson = JsonSerializer.Serialize(user, options);
-Console.WriteLine($"\nPretty:\n{prettyJson}");
-
-// With camelCase (like JavaScript)
-var camelOptions = new JsonSerializerOptions
-{
-    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    WriteIndented = true
-};
-var camelJson = JsonSerializer.Serialize(user, camelOptions);
-Console.WriteLine($"\ncamelCase:\n{camelJson}");
-// Output: {"name":"Alice","email":"alice@example.com","age":30}
-
-
-// --- Part 2: Convert JSON to C# object ---
-Console.WriteLine("\n=== JSON to C# ===\n");
-
-var jsonInput = """
-{
-    "name": "Bob",
-    "email": "bob@example.com",
-    "age": 25
-}
-""";
-
-// Need to tell it to ignore case (JSON has "name", C# has "Name")
-var parseOptions = new JsonSerializerOptions
-{
-    PropertyNameCaseInsensitive = true
-};
-
-var parsedUser = JsonSerializer.Deserialize<User>(jsonInput, parseOptions);
-Console.WriteLine($"Parsed: {parsedUser.Name}, {parsedUser.Email}, {parsedUser.Age}");
-
-
-// --- Part 3: Handle missing or extra properties ---
-Console.WriteLine("\n=== Missing/Extra Properties ===\n");
-
-var incompleteJson = """{"name": "Charlie"}""";
-var partialUser = JsonSerializer.Deserialize<User>(incompleteJson, parseOptions);
-Console.WriteLine($"Missing props: Name={partialUser.Name}, Email={partialUser.Email ?? "null"}, Age={partialUser.Age}");
-// Missing properties get default values (null for string, 0 for int)
-
-
-// Define the User type
-record User(string Name, string? Email, int Age);
-```
-
-Run it:
-
-```bash
-dotnet run test-json.cs
-```
-
-**Key points:**
-
-| Option | What it does |
-|--------|--------------|
-| `WriteIndented = true` | Adds spaces and newlines (easier to read) |
-| `PropertyNamingPolicy = JsonNamingPolicy.CamelCase` | Uses `camelCase` like JavaScript instead of `PascalCase` |
-| `PropertyNameCaseInsensitive = true` | Matches "name" to "Name" when parsing |
-
-**Clean up:**
-
-```bash
-rm test-json.cs
-```
-
----
-
-## Exercise 8.3 — Read and write files
-
-**Task:** Practice file operations.
+**Task:** Build a typed `ExchangeRateClient`, register it as a named client, and use it to add a converted-balance line to the statement.
 
 **Solution**
 
-Create `test-files.cs`:
+**Step 1:** Create `src/PaymentApp.Infrastructure/Clients/ExchangeRateClient.cs`:
 
 ```csharp
-#!/usr/bin/env dotnet
-
-// --- Part 1: Write files ---
-Console.WriteLine("=== Writing Files ===\n");
-
-// Write a simple text file
-await File.WriteAllTextAsync("hello.txt", "Hello, World!");
-Console.WriteLine("Created hello.txt");
-
-// Write multiple lines
-var lines = new[] { "Line 1", "Line 2", "Line 3" };
-await File.WriteAllLinesAsync("lines.txt", lines);
-Console.WriteLine("Created lines.txt");
-
-
-// --- Part 2: Read files ---
-Console.WriteLine("\n=== Reading Files ===\n");
-
-// Read entire file as one string
-var content = await File.ReadAllTextAsync("hello.txt");
-Console.WriteLine($"hello.txt contains: {content}");
-
-// Read file as array of lines
-var readLines = await File.ReadAllLinesAsync("lines.txt");
-Console.WriteLine($"lines.txt has {readLines.Length} lines:");
-foreach (var line in readLines)
-{
-    Console.WriteLine($"  - {line}");
-}
-
-
-// --- Part 3: Check if files/folders exist ---
-Console.WriteLine("\n=== Checking Existence ===\n");
-
-Console.WriteLine($"hello.txt exists: {File.Exists("hello.txt")}");
-Console.WriteLine($"missing.txt exists: {File.Exists("missing.txt")}");
-
-// Create a folder
-Directory.CreateDirectory("test-folder");
-Console.WriteLine($"test-folder exists: {Directory.Exists("test-folder")}");
-
-
-// --- Part 4: Work with paths ---
-Console.WriteLine("\n=== Path Operations ===\n");
-
-// Combine path parts (handles / and \ for you)
-var fullPath = Path.Combine("folder", "subfolder", "file.txt");
-Console.WriteLine($"Combined path: {fullPath}");
-
-// Get filename from path
-var fileName = Path.GetFileName("/users/alice/documents/report.pdf");
-Console.WriteLine($"Filename: {fileName}");
-
-// Get extension
-var extension = Path.GetExtension("photo.jpg");
-Console.WriteLine($"Extension: {extension}");
-
-// Get folder part
-var folder = Path.GetDirectoryName("/users/alice/documents/report.pdf");
-Console.WriteLine($"Directory: {folder}");
-
-
-// --- Cleanup ---
-Console.WriteLine("\n=== Cleanup ===\n");
-File.Delete("hello.txt");
-File.Delete("lines.txt");
-Directory.Delete("test-folder");
-Console.WriteLine("Cleaned up test files and folders");
-```
-
-Run it:
-
-```bash
-dotnet run test-files.cs
-```
-
-**Expected output:**
-
-```
-=== Writing Files ===
-
-Created hello.txt
-Created lines.txt
-
-=== Reading Files ===
-
-hello.txt contains: Hello, World!
-lines.txt has 3 lines:
-  - Line 1
-  - Line 2
-  - Line 3
-
-=== Checking Existence ===
-
-hello.txt exists: True
-missing.txt exists: False
-test-folder exists: True
-
-=== Path Operations ===
-
-Combined path: folder/subfolder/file.txt
-Filename: report.pdf
-Extension: .jpg
-Directory: /users/alice/documents
-
-=== Cleanup ===
-
-Cleaned up test files and folders
-```
-
-**Clean up:**
-
-```bash
-rm test-files.cs
-```
-
----
-
-## Exercise 8.4 — String operations and StringBuilder
-
-**Task:** Practice common string operations.
-
-**Solution**
-
-Create `test-strings.cs`:
-
-```csharp
-#!/usr/bin/env dotnet
-
-using System.Text;  // Needed for StringBuilder
-
-// --- Part 1: Common string operations ---
-Console.WriteLine("=== String Operations ===\n");
-
-var text = "  Hello, World!  ";
-
-Console.WriteLine($"Original: '{text}'");
-Console.WriteLine($"Trim (remove spaces): '{text.Trim()}'");
-Console.WriteLine($"ToLower: '{text.ToLower()}'");
-Console.WriteLine($"ToUpper: '{text.ToUpper()}'");
-Console.WriteLine($"Replace 'World' with 'C#': '{text.Replace("World", "C#")}'");
-Console.WriteLine($"Contains 'World': {text.Contains("World")}");
-Console.WriteLine($"StartsWith '  Hello': {text.StartsWith("  Hello")}");
-Console.WriteLine($"IndexOf 'World': {text.IndexOf("World")}");
-
-
-// --- Part 2: Split and Join ---
-Console.WriteLine("\n=== Split and Join ===\n");
-
-var csv = "apple,banana,cherry";
-var fruits = csv.Split(',');
-Console.WriteLine($"Split '{csv}' by comma:");
-foreach (var fruit in fruits)
-{
-    Console.WriteLine($"  - {fruit}");
-}
-
-var joined = string.Join(" | ", fruits);
-Console.WriteLine($"Joined with ' | ': {joined}");
-
-
-// --- Part 3: String interpolation ---
-Console.WriteLine("\n=== String Interpolation ===\n");
-
-var name = "Alice";
-var balance = 1234.567m;
-
-// Basic interpolation
-Console.WriteLine($"Hello, {name}!");
-
-// With expressions
-Console.WriteLine($"Next year you'll be... wait, we don't have age.");
-
-// Formatting numbers
-Console.WriteLine($"Balance: {balance:N2}");      // 1,234.57 (number with 2 decimals)
-Console.WriteLine($"Balance: {balance:C}");       // $1,234.57 (currency)
-Console.WriteLine($"Balance: {balance:F4}");      // 1234.5670 (fixed 4 decimals)
-
-
-// --- Part 4: StringBuilder for building long strings ---
-Console.WriteLine("\n=== StringBuilder ===\n");
-
-// Bad way: concatenation in a loop (slow, creates many strings)
-var badResult = "";
-for (int i = 0; i < 5; i++)
-{
-    badResult += $"Line {i}\n";  // Creates a new string each time!
-}
-Console.WriteLine("Concatenation result:");
-Console.WriteLine(badResult);
-
-// Good way: StringBuilder (fast, reuses one buffer)
-var sb = new StringBuilder();
-for (int i = 0; i < 5; i++)
-{
-    sb.AppendLine($"Line {i}");  // Appends to same buffer
-}
-var goodResult = sb.ToString();  // Convert to string at the end
-Console.WriteLine("StringBuilder result:");
-Console.WriteLine(goodResult);
-
-Console.WriteLine("(Results are the same, but StringBuilder is faster for large strings)");
-```
-
-Run it:
-
-```bash
-dotnet run test-strings.cs
-```
-
-**Key points:**
-
-| Format | Example | Output |
-|--------|---------|--------|
-| `{value:N2}` | `{1234.5:N2}` | 1,234.50 (number with commas) |
-| `{value:C}` | `{1234.5:C}` | $1,234.50 (currency) |
-| `{value:F2}` | `{1234.5:F2}` | 1234.50 (fixed decimals) |
-| `{date:yyyy-MM-dd}` | `{DateTime.Now:yyyy-MM-dd}` | 2024-12-25 |
-
-**Clean up:**
-
-```bash
-rm test-strings.cs
-```
-
----
-
-## Exercise 8.5 — DateTime operations
-
-**Task:** Practice working with dates and times.
-
-**Solution**
-
-Create `test-datetime.cs`:
-
-```csharp
-#!/usr/bin/env dotnet
-
-// --- Part 1: Creating dates ---
-Console.WriteLine("=== Creating Dates ===\n");
-
-// Current date/time
-var now = DateTime.Now;
-var utcNow = DateTime.UtcNow;
-var today = DateTime.Today;  // Today at midnight
-
-Console.WriteLine($"Now (local time): {now}");
-Console.WriteLine($"Now (UTC time):   {utcNow}");
-Console.WriteLine($"Today:            {today}");
-
-// Specific date
-var birthday = new DateTime(1990, 5, 15);  // May 15, 1990
-var withTime = new DateTime(1990, 5, 15, 14, 30, 0);  // 2:30 PM
-Console.WriteLine($"\nBirthday:   {birthday}");
-Console.WriteLine($"With time:  {withTime}");
-
-
-// --- Part 2: Formatting dates ---
-Console.WriteLine("\n=== Formatting Dates ===\n");
-
-var date = new DateTime(2024, 12, 25, 14, 30, 45);
-
-Console.WriteLine($"Default:     {date}");
-Console.WriteLine($"yyyy-MM-dd:  {date:yyyy-MM-dd}");
-Console.WriteLine($"dd/MM/yyyy:  {date:dd/MM/yyyy}");
-Console.WriteLine($"Long date:   {date:MMMM d, yyyy}");
-Console.WriteLine($"Time only:   {date:HH:mm:ss}");
-Console.WriteLine($"ISO format:  {date:o}");
-
-
-// --- Part 3: Parsing dates (converting text to date) ---
-Console.WriteLine("\n=== Parsing Dates ===\n");
-
-var dateText = "2024-12-25";
-var parsed = DateTime.Parse(dateText);
-Console.WriteLine($"Parsed '{dateText}': {parsed}");
-
-// Safe parsing (doesn't crash if invalid)
-if (DateTime.TryParse("not a date", out var result))
-{
-    Console.WriteLine($"Parsed successfully: {result}");
-}
-else
-{
-    Console.WriteLine("'not a date' could not be parsed");
-}
-
-
-// --- Part 4: Date math ---
-Console.WriteLine("\n=== Date Math ===\n");
-
-var startDate = DateTime.Today;
-Console.WriteLine($"Today:      {startDate:yyyy-MM-dd}");
-Console.WriteLine($"Tomorrow:   {startDate.AddDays(1):yyyy-MM-dd}");
-Console.WriteLine($"Next week:  {startDate.AddDays(7):yyyy-MM-dd}");
-Console.WriteLine($"Next month: {startDate.AddMonths(1):yyyy-MM-dd}");
-Console.WriteLine($"Next year:  {startDate.AddYears(1):yyyy-MM-dd}");
-
-// Difference between dates
-var futureDate = startDate.AddDays(30);
-var difference = futureDate - startDate;  // Returns a TimeSpan
-Console.WriteLine($"\nDays until {futureDate:yyyy-MM-dd}: {difference.TotalDays}");
-
-
-// --- Part 5: UTC vs Local ---
-Console.WriteLine("\n=== UTC vs Local ===\n");
-
-var utc = DateTime.UtcNow;
-var local = utc.ToLocalTime();
-
-Console.WriteLine($"UTC time:   {utc}");
-Console.WriteLine($"Local time: {local}");
-Console.WriteLine($"Difference: {(local - utc).TotalHours} hours");
-
-Console.WriteLine("\n💡 Tip: Always store dates in UTC, convert to local only for display.");
-```
-
-Run it:
-
-```bash
-dotnet run test-datetime.cs
-```
-
-**Common date format codes:**
-
-| Code | Meaning | Example |
-|------|---------|---------|
-| `yyyy` | 4-digit year | 2024 |
-| `MM` | 2-digit month | 12 |
-| `dd` | 2-digit day | 25 |
-| `HH` | 24-hour hour | 14 |
-| `mm` | Minutes | 30 |
-| `ss` | Seconds | 45 |
-| `MMMM` | Full month name | December |
-| `ddd` | Short day name | Wed |
-
-**Clean up:**
-
-```bash
-rm test-datetime.cs
-```
-
----
-
-## Exercise 8.6 — Collections (List, Dictionary, HashSet)
-
-**Task:** Practice using collections.
-
-**Solution**
-
-Create `test-collections.cs`:
-
-```csharp
-#!/usr/bin/env dotnet
-
-// --- Part 1: List<T> (like JavaScript Array) ---
-Console.WriteLine("=== List<T> ===\n");
-
-var names = new List<string> { "Alice", "Bob", "Charlie" };
-Console.WriteLine($"Initial: [{string.Join(", ", names)}]");
-
-// Add items
-names.Add("Diana");
-Console.WriteLine($"After Add: [{string.Join(", ", names)}]");
-
-// Access by index
-Console.WriteLine($"First item: {names[0]}");
-Console.WriteLine($"Last item: {names[^1]}");  // ^1 means "from the end"
-
-// Check if contains
-Console.WriteLine($"Contains 'Bob': {names.Contains("Bob")}");
-
-// Find items
-var startsWithC = names.Find(n => n.StartsWith("C"));
-Console.WriteLine($"First name starting with C: {startsWithC}");
-
-// Remove items
-names.Remove("Bob");
-Console.WriteLine($"After Remove: [{string.Join(", ", names)}]");
-
-// Count
-Console.WriteLine($"Count: {names.Count}");
-
-
-// --- Part 2: Dictionary<K, V> (like JavaScript Map or object) ---
-Console.WriteLine("\n=== Dictionary<K, V> ===\n");
-
-var ages = new Dictionary<string, int>
-{
-    ["Alice"] = 30,
-    ["Bob"] = 25
-};
-
-Console.WriteLine("Initial:");
-foreach (var pair in ages)
-{
-    Console.WriteLine($"  {pair.Key}: {pair.Value}");
-}
-
-// Add or update
-ages["Charlie"] = 35;
-ages["Alice"] = 31;  // Update existing
-Console.WriteLine($"\nAfter updates: Alice={ages["Alice"]}, Charlie={ages["Charlie"]}");
-
-// Safe access (TryGetValue)
-if (ages.TryGetValue("Diana", out var dianaAge))
-{
-    Console.WriteLine($"Diana's age: {dianaAge}");
-}
-else
-{
-    Console.WriteLine("Diana not found");
-}
-
-// Check if key exists
-Console.WriteLine($"Contains 'Bob': {ages.ContainsKey("Bob")}");
-
-
-// --- Part 3: HashSet<T> (unique items only, like JavaScript Set) ---
-Console.WriteLine("\n=== HashSet<T> ===\n");
-
-var uniqueNames = new HashSet<string> { "Alice", "Bob" };
-Console.WriteLine($"Initial: [{string.Join(", ", uniqueNames)}]");
-
-// Add (returns false if already exists)
-var added1 = uniqueNames.Add("Charlie");
-var added2 = uniqueNames.Add("Alice");  // Already exists
-Console.WriteLine($"Added Charlie: {added1}");
-Console.WriteLine($"Added Alice again: {added2}");
-Console.WriteLine($"After adds: [{string.Join(", ", uniqueNames)}]");
-
-// Check if contains
-Console.WriteLine($"Contains 'Bob': {uniqueNames.Contains("Bob")}");
-
-// Useful for removing duplicates
-var listWithDuplicates = new List<string> { "a", "b", "a", "c", "b" };
-var unique = new HashSet<string>(listWithDuplicates);
-Console.WriteLine($"\nDuplicates removed: [{string.Join(", ", unique)}]");
-```
-
-Run it:
-
-```bash
-dotnet run test-collections.cs
-```
-
-**Quick reference:**
-
-| Task | List | Dictionary | HashSet |
-|------|------|------------|---------|
-| Add item | `list.Add(x)` | `dict[key] = value` | `set.Add(x)` |
-| Get item | `list[0]` | `dict[key]` | — |
-| Check exists | `list.Contains(x)` | `dict.ContainsKey(k)` | `set.Contains(x)` |
-| Remove | `list.Remove(x)` | `dict.Remove(key)` | `set.Remove(x)` |
-| Count | `list.Count` | `dict.Count` | `set.Count` |
-
-**Clean up:**
-
-```bash
-rm test-collections.cs
-```
-
----
-
-## Exercise 8.7 — Use HttpClient in PaymentApp (optional)
-
-If you want to practice `HttpClient` in a real context, here's how to add it to PaymentApp. This prepares us for Topic 10 where we'll call an external payment processor.
-
-**Task:** Create a simple client wrapper for calling external APIs.
-
-**Solution**
-
-Create `src/PaymentApp.Infrastructure/Clients/ExternalApiClient.cs`:
-
-```csharp
-using System.Text.Json;
+using System.Net.Http.Json;
 
 namespace PaymentApp.Infrastructure.Clients;
 
+public record FxRate(string From, string To, decimal Rate, DateOnly Date);
+
 /// <summary>
-/// A simple wrapper for calling external APIs.
-/// This shows how to use IHttpClientFactory properly.
+/// Typed client over a named HttpClient (base URL configured in Program.cs).
+/// This is the same shape Topic 10's PaymentProcessorClient uses.
 /// </summary>
-public class ExternalApiClient
+public class ExchangeRateClient
 {
     private readonly HttpClient _client;
-    private readonly JsonSerializerOptions _jsonOptions;
 
-    public ExternalApiClient(IHttpClientFactory factory)
+    public ExchangeRateClient(IHttpClientFactory factory)
     {
-        _client = factory.CreateClient();
-        _jsonOptions = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        };
+        _client = factory.CreateClient("fx");   // pre-configured named client
     }
 
-    public async Task<T?> GetAsync<T>(string url)
+    public async Task<FxRate> GetRateAsync(string from, string to)
     {
-        var response = await _client.GetAsync(url);
-        response.EnsureSuccessStatusCode();  // Throws if status is not 2xx
+        // Frankfurter returns:
+        // {"amount":1.0,"base":"USD","date":"2026-08-04","rates":{"EUR":0.92}}
+        var body = await _client.GetFromJsonAsync<FrankfurterResponse>(
+            $"latest?from={from}&to={to}");
 
-        var json = await response.Content.ReadAsStringAsync();
-        return JsonSerializer.Deserialize<T>(json, _jsonOptions);
+        var rate = body!.Rates[to];             // Dictionary lookup
+        return new FxRate(from, to, rate, DateOnly.Parse(body.Date));
     }
 
-    public async Task<TResponse?> PostAsync<TRequest, TResponse>(string url, TRequest data)
-    {
-        var response = await _client.PostAsJsonAsync(url, data);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync();
-        return JsonSerializer.Deserialize<TResponse>(json, _jsonOptions);
-    }
+    // GetFromJsonAsync uses web defaults (case-insensitive) — maps the lowercase JSON.
+    private record FrankfurterResponse(
+        decimal Amount, string Base, string Date, Dictionary<string, decimal> Rates);
 }
 ```
 
-Register in `Program.cs`:
+**Step 2:** Register the named client and the typed client in `Program.cs`:
 
 ```csharp
-// Add HttpClient factory
-builder.Services.AddHttpClient();
+// Named HttpClient for the FX service. Same IHttpClientFactory pattern Topic 10
+// reuses for the payment processor — one pooled handler, no socket exhaustion.
+builder.Services.AddHttpClient("fx", client =>
+{
+    client.BaseAddress = new Uri("https://api.frankfurter.app/");
+});
 
-// Register our client
-builder.Services.AddScoped<ExternalApiClient>();
+builder.Services.AddScoped<ExchangeRateClient>();
 ```
 
-This is a simple example. In Topic 10, we'll create a more complete client for the payment processor.
+**Step 3:** Inject it into `DocumentService` and use it in the statement. Update the constructor:
+
+```csharp
+using PaymentApp.Infrastructure.Clients;   // add at the top
+
+private readonly ExchangeRateClient _fx;
+
+public DocumentService(PaymentDbContext db, ExchangeRateClient fx)
+{
+    _db = db;
+    _fx = fx;
+    _uploadDir = Path.Combine(AppContext.BaseDirectory, "uploads");
+    Directory.CreateDirectory(_uploadDir);
+}
+```
+
+Then add the conversion block inside `BuildStatementAsync`, just before building the `StringBuilder`:
+
+```csharp
+// Optional: convert the balance to another currency using the live rate.
+if (!string.IsNullOrEmpty(currency) &&
+    !currency.Equals("USD", StringComparison.OrdinalIgnoreCase))
+{
+    var fx = await _fx.GetRateAsync("USD", currency.ToUpperInvariant());
+    var converted = user.Balance * fx.Rate;
+    lines.Add(($"Balance ({fx.To})", $"{converted:N2} @ {fx.Rate} on {fx.Date:yyyy-MM-dd}"));
+}
+```
+
+**Test it:**
+
+```bash
+curl "http://localhost:5000/v1/document/statement?userId=1&currency=EUR"
+```
+
+**Expected output (rate varies):**
+
+```
+=== PaymentApp Account Statement ===
+Generated: 2026-08-04 09:24:03 UTC
+
+Account holder    : Alice
+Email             : alice@bank.test
+Current balance   : $1,000.00
+Document on file  : 1_9f8c....txt
+Balance (EUR)     : 920.00 @ 0.92 on 2026-08-04
+
+Thank you for banking with PaymentApp.
+```
+
+**What this taught:**
+
+| Tool | Where it showed up |
+|------|--------------------|
+| `IHttpClientFactory` + named client | `CreateClient("fx")`, base URL set once in `Program.cs` |
+| `GetFromJsonAsync<T>` | GET + deserialize in one call (web defaults, case-insensitive) |
+| `Dictionary<string, decimal>` | Reading `rates` out of the JSON response |
+| `DateOnly.Parse` | Turning the response's date string into a typed value |
+
+**The Topic 10 link:** this named-client-plus-typed-wrapper is exactly what `PaymentProcessorClient` becomes — only the client name (`"processor"`), base URL (from config), and endpoints change. You've already built the pattern.
+
+**Interview talking point:** "I never `new` an `HttpClient`. I register a named client via `IHttpClientFactory` so the base URL and handler are configured once and the connection pool is reused — otherwise you get socket exhaustion under load. The typed wrapper keeps deserialization and error handling in one place."
+
+---
+
+## Standard library cheat-sheet
+
+You've now used the big ones on real code. Here's the rest of the everyday surface — reach for these anywhere, no throwaway scripts needed.
+
+**Strings**
+
+| Task | Code |
+|------|------|
+| Trim / case | `s.Trim()`, `s.ToLower()`, `s.ToUpper()` |
+| Contains / find | `s.Contains("x")`, `s.IndexOf("x")` (−1 if absent) |
+| Replace | `s.Replace("a", "b")` |
+| Split / join | `s.Split(',')`, `string.Join("-", items)` |
+| Format money / number | `{amount:C}` → `$1,000.00`, `{n:N2}` → `1,234.57` |
+
+**DateTime**
+
+| Task | Code |
+|------|------|
+| Now (store this) | `DateTime.UtcNow` |
+| Format | `{d:yyyy-MM-dd}`, `{d:HH:mm:ss}`, `{d:o}` (ISO) |
+| Parse safely | `DateTime.TryParse(s, out var d)` |
+| Math | `d.AddDays(7)`, `later - earlier` → `TimeSpan` |
+
+**Collections**
+
+| Type | Use | Key ops |
+|------|-----|---------|
+| `List<T>` | Ordered (JS `Array`) | `Add`, `list[i]`, `Contains`, `Find`, `Count` |
+| `Dictionary<K,V>` | Key/value (JS `Map`) | `dict[k] = v`, `TryGetValue`, `ContainsKey` |
+| `HashSet<T>` | Unique (JS `Set`) | `Add` (false if dup), `Contains` — e.g. `new HashSet<string>(list)` dedupes |
 
 ---
 
 ## What we learned
 
-| Tool | Purpose | Node.js equivalent |
-|------|---------|-------------------|
-| `HttpClient` | Make HTTP requests | `fetch` or `axios` |
-| `System.Text.Json` | Parse and create JSON | `JSON.parse` / `JSON.stringify` |
-| `File` class | Read and write files | `fs` module |
-| `Path` class | Work with file paths | `path` module |
-| `StringBuilder` | Build long strings efficiently | — |
-| `DateTime` | Work with dates and times | `Date` |
-| `List<T>` | Ordered collection | `Array` |
-| `Dictionary<K,V>` | Key-value pairs | `Map` or object |
-| `HashSet<T>` | Unique items | `Set` |
+| Tool | Purpose | Node.js equivalent | Built into |
+|------|---------|--------------------|------------|
+| `System.Text.Json` | Parse/create JSON | `JSON.parse` / `JSON.stringify` | Metadata sidecar (8.1) |
+| `File` / `Path` | Read/write files, build paths | `fs` / `path` | Sidecar + statement (8.1, 8.3) |
+| `Stream` | Handle data in chunks | `Readable` / `Writable` | Download (8.2) |
+| `StringBuilder` | Build strings efficiently | — | Statement (8.3) |
+| `DateTime` | Dates and times | `Date` | Timestamps (8.1, 8.3) |
+| `List` / `Dictionary` / `HashSet` | Collections | `Array` / `Map` / `Set` | Statement + FX (8.3, 8.4) |
+| `HttpClient` + `IHttpClientFactory` | HTTP requests | `fetch` / `axios` | FX client (8.4) |
 
 ---
 
 ## Interview talking points
 
-- "I use `IHttpClientFactory` instead of `new HttpClient()` to avoid socket exhaustion (running out of network connections)."
-- "`System.Text.Json` is the built-in JSON library. It's faster than Newtonsoft.Json for most use cases."
-- "For small files, I use `File.ReadAllTextAsync()`. For large files, I use streams to avoid loading everything into memory."
-- "`StringBuilder` is important when building strings in loops — each `+` creates a new string, which is slow."
-- "I store all dates in UTC and only convert to local time when displaying to users."
+- "I use `IHttpClientFactory` (named clients) instead of `new HttpClient()` to avoid socket exhaustion — the handler and base URL are configured once and pooled."
+- "`System.Text.Json` is the built-in library. I write camelCase + indented and read with `JsonSerializerDefaults.Web` so casing round-trips."
+- "For downloads I stream (`File.OpenRead` → `FileStreamResult`) instead of buffering — memory stays flat regardless of file size."
+- "`StringBuilder` beats `+=` in loops; composite format items like `{label,-18}` and `{amount:C}` handle alignment and currency."
+- "I store timestamps in UTC and format only for display."
 
 ---
 

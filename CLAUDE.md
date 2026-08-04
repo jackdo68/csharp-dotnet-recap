@@ -18,10 +18,10 @@ The whole course ties to **one** running example, the **PaymentApp** — built i
 | 4 | Errors & Exceptions | Domain exceptions, Result pattern |
 | 5 | Web API + DI + EF Core | Controllers, DI wiring, Postgres, migrations, register endpoint |
 | 6 | EF Core Deep Dive | Change tracking internals, advanced queries, transactions |
-| 7 | Concurrency & Threading | Transfer endpoint with proper locking from day one |
-| 8 | .NET Standard Library | Document upload (File, Stream, JSON, HttpClient) |
+| 7 | Concurrency & Threading | Transfer endpoint with proper locking from day one + document upload (CPU-bound scan) |
+| 8 | .NET Standard Library | Extends the document feature: JSON metadata sidecar, streaming download, account statement; external `HttpClient` (FX rates) |
 | 9 | Authentication | Login, JWT, `[Authorize]`, ownership checks |
-| 10 | Production | Docker, health checks, configuration |
+| 10 | Production | Docker, health checks, config, external payment-processor + Transaction ledger, replica-safe transfer |
 
 **Topics 11–12**: Deep dives that stand alone:
 
@@ -103,14 +103,19 @@ PaymentApp/
 └── PaymentApp.Api/              # Controllers, DI wiring, Program.cs
 ```
 
-**One DB model**: `User` (Id, Name, Email, PasswordHash, Balance [decimal], DocumentPath [string]). **No `Account` table** — balance lives on `User`. Users Alice/Bob/Cara with `*@bank.test` emails and password `Passw0rd!`; every new user starts with **$1,000** balance.
+**DB models**:
+- `User` (Id, Name, Email, PasswordHash, Balance [decimal], DocumentPath [string]). **No `Account` table** — balance lives on `User`. Users Alice/Bob/Cara with `*@bank.test` emails and password `Passw0rd!`; every new user starts with **$1,000** balance.
+- `Transaction` (ledger, **added Topic 10**): one row per payment-processor call. Fields: `Id` (internal PK), `TransferId` [Guid, links the two legs of a transfer], `UserId`, `Type` [Withdraw/Deposit], `Amount` [decimal], `Status` [Pending → Successful/Failed], `ExternalTransactionId` [id returned by the Node processor], `ProcessorResponse` [jsonb, raw processor reply], `CreatedAt`/`CompletedAt`. Enums stored as text via `HasConversion<string>()`.
 
-**Four endpoints** across **three controllers**:
+**Six endpoints** across **three controllers**:
 - **`AuthController`** → `IAuthService`: `POST /v1/auth/register` (Topic 5) and `POST /v1/auth/login` (Topic 9, returns JWT).
-- **`PaymentController`** → `IPaymentService`: `POST /v1/payment/transfer` (Topic 7, with proper locking from day one).
-- **`DocumentController`** → `IDocumentService`: `POST /v1/document/upload` (Topic 8, demonstrates File/Stream APIs).
+- **`PaymentController`** → `IPaymentService`: `POST /v1/payment/transfer` (Topic 7 with an in-process `SemaphoreSlim`; **Topic 10 refactors it** to call the external payment-processor — atomic DB `UPDATE`, replica-safe — and record each leg in the `Transaction` ledger).
+- **`DocumentController`** → `IDocumentService`: `POST /v1/document/upload` (Topic 7 — CPU-bound scan + store), `GET /v1/document/download` (Topic 8 — streamed file, restores original name from a JSON metadata sidecar), `GET /v1/document/statement` (Topic 8 — text statement; `?currency=` uses the FX `HttpClient`). Topic 9 puts all three behind `[Authorize]` and takes the user id from the token.
+- **External integration**: `ExchangeRateClient` (Topic 8) — a named `HttpClient` over `api.frankfurter.app`, the same `IHttpClientFactory` pattern Topic 10's `PaymentProcessorClient` reuses.
 
-**Build-once philosophy**: We don't introduce broken code to fix later. Transfer is built with proper concurrency handling in Topic 7. Auth is wired correctly in Topic 9. Each topic adds new functionality without rewriting previous work.
+**Build-once philosophy**: We don't introduce broken code to fix later. Transfer is built with *correct single-node* concurrency handling in Topic 7 (`SemaphoreSlim`); **Topic 10 then scales it out** — not a bug fix, but the explicitly-promised evolution to a replica-safe external processor + ledger (Topic 7 flags the multi-replica limitation and points to Topic 10; Topic 8 promises the processor client). Auth is wired correctly in Topic 9. Aside from that transfer evolution, each topic adds functionality without rewriting previous work.
+
+**External payment-processor** (added Topic 10): a small **Node/Express** service (`payment-processor/`, sibling to the .NET solution) that owns the atomic balance mutation (`UPDATE "Users" SET "Balance" = "Balance" - $1 WHERE "Id" = $2 AND "Balance" >= $1 RETURNING "Balance"`), exposes `POST /v1/withdraw` + `POST /v1/deposit` (each returns `{ transactionId, balance }`) and `GET /healthz`. It shares the same Postgres DB and runs in `docker-compose` alongside `db` and `api`; the API reaches it by service name (`http://processor:4000`, from config `PaymentProcessor:BaseUrl`) via a named `HttpClient` (`PaymentProcessorClient`).
 
 Postgres credentials `payapp`/`devpass`. Don't introduce unrelated example domains.
 

@@ -395,7 +395,31 @@ dotnet add src/PaymentApp.Infrastructure package Microsoft.Extensions.Http
 
 > **Node anchor:** this is your `npm install` — `dotnet add package` ≈ `npm install <pkg>`, and the `using` in the next file ≈ the `import`. The subtlety with no TS equivalent: .NET flows a project's dependencies *down its reference chain* at compile time, so the `Api` project shared this package with everything it referenced — you only hit the wall the moment you use the type in a library that sits **upstream** of the Api, where that sharing doesn't reach. The interface's namespace is `System.Net.Http`, already in the SDK's implicit usings, so once the package is referenced you need no extra `using` line — the missing **assembly reference**, not a missing using, was the real gap.
 
-**Step 2:** Create `src/PaymentApp.Infrastructure/Clients/ExchangeRateClient.cs`:
+**Step 2:** Give the client name a symbol so a typo can't slip through.
+
+A named client is identified by a **string** — and a string is invisible to the compiler. Register `"fx"` in `Program.cs` but ask for `"fxt"` in the client and it compiles clean, then hands you a default `HttpClient` with **no `BaseAddress`** that blows up only on the first request (`InvalidOperationException: An invalid request URI was provided…`). The fix is to stop typing the literal in two places: hoist it to a `const` both sides reference, so the "name" becomes a symbol the compiler tracks.
+
+Create `src/PaymentApp.Infrastructure/Clients/HttpClientNames.cs`:
+
+```csharp
+namespace PaymentApp.Infrastructure.Clients;
+
+/// <summary>
+/// Single source of truth for named-HttpClient keys. Registration and consumer
+/// both reference the constant, so they can never drift.
+/// </summary>
+public static class HttpClientNames
+{
+    public const string Fx = "fx";
+    public const string PaymentProcessor = "processor";   // Topic 10 reuses this
+}
+```
+
+Now a typo is a **compile error**, not a runtime surprise: `HttpClientNames.Fxt` fails with `CS0117: 'HttpClientNames' does not contain a definition for 'Fxt'`, and renaming the constant updates both sides at once.
+
+> **Node anchor:** this is `const HTTP_CLIENTS = { fx: 'fx' } as const` and referencing `HTTP_CLIENTS.fx` instead of sprinkling the raw `'fx'` around — you turn a stringly-typed lookup into a symbol the type system watches. (If you want the string gone entirely, the **typed-client** form — `AddHttpClient<ExchangeRateClient>(…)` + inject `HttpClient` directly — is fully compiler-enforced, at the cost of one client per type. We keep the named pattern here because Topic 10 points several wrappers at differently-configured clients.)
+
+**Step 3:** Create `src/PaymentApp.Infrastructure/Clients/ExchangeRateClient.cs`:
 
 ```csharp
 using System.Net.Http.Json;
@@ -414,7 +438,7 @@ public class ExchangeRateClient
 
     public ExchangeRateClient(IHttpClientFactory factory)
     {
-        _client = factory.CreateClient("fx");   // pre-configured named client
+        _client = factory.CreateClient(HttpClientNames.Fx);   // symbol, not a magic string
     }
 
     public async Task<FxRate> GetRateAsync(string from, string to)
@@ -434,12 +458,12 @@ public class ExchangeRateClient
 }
 ```
 
-**Step 3:** Register the named client and the typed client in `Program.cs`:
+**Step 4:** Register the named client and the typed client in `Program.cs`:
 
 ```csharp
 // Named HttpClient for the FX service. Same IHttpClientFactory pattern Topic 10
 // reuses for the payment processor — one pooled handler, no socket exhaustion.
-builder.Services.AddHttpClient("fx", client =>
+builder.Services.AddHttpClient(HttpClientNames.Fx, client =>
 {
     client.BaseAddress = new Uri("https://api.frankfurter.app/");
 });
@@ -447,7 +471,9 @@ builder.Services.AddHttpClient("fx", client =>
 builder.Services.AddScoped<ExchangeRateClient>();
 ```
 
-**Step 4:** Inject it into `DocumentService` and use it in the statement. Update the constructor:
+> **Where did `IHttpClientFactory` get registered?** You never wrote a line to register it — and it is **not** an out-of-the-box container service. `AddHttpClient(...)` registers it for you. Under the hood, the first thing every `AddHttpClient` overload does is call the parameterless `services.AddHttpClient()`, which wires the whole factory infrastructure into DI — `IHttpClientFactory`, `ITypedHttpClientFactory<>`, the handler pool, the default `HttpMessageHandlerBuilder`. That call is **idempotent** (it uses `TryAdd…` internally), so registering ten named clients still registers the core services exactly once. So the same line that configures your `"fx"` client is also what puts `IHttpClientFactory` in the container. Note the split that made this confusing: `HttpClient` is base-framework (you can just `new` it, no DI), while `IHttpClientFactory` only *lives* in the `System.Net.Http` namespace but ships in the `Microsoft.Extensions.Http` package (Step 1) and enters DI only via `AddHttpClient`. Remove every `AddHttpClient` call and injecting the factory throws at resolution: *"Unable to resolve service for type 'System.Net.Http.IHttpClientFactory'."* The closest Node hook is NestJS's `HttpModule.forRoot()` — one call both configures the client and makes the underlying service injectable.
+
+**Step 5:** Inject it into `DocumentService` and use it in the statement. Update the constructor:
 
 ```csharp
 using PaymentApp.Infrastructure.Clients;   // add at the top
@@ -501,14 +527,16 @@ Thank you for banking with PaymentApp.
 
 | Tool | Where it showed up |
 |------|--------------------|
-| `IHttpClientFactory` + named client | `CreateClient("fx")`, base URL set once in `Program.cs` |
+| `IHttpClientFactory` + named client | `CreateClient(HttpClientNames.Fx)`, base URL set once in `Program.cs` |
+| `AddHttpClient` registers the factory | one call configures the client *and* wires `IHttpClientFactory` into DI (idempotent) |
+| Name-as-constant (`HttpClientNames.Fx`) | a mistyped client key is now `CS0117` at compile time, not a runtime `InvalidOperationException` |
 | `GetFromJsonAsync<T>` | GET + deserialize in one call (web defaults, case-insensitive) |
 | `Dictionary<string, decimal>` | Reading `rates` out of the JSON response |
 | `DateOnly.Parse` | Turning the response's date string into a typed value |
 
-**The Topic 10 link:** this named-client-plus-typed-wrapper is exactly what `PaymentProcessorClient` becomes — only the client name (`"processor"`), base URL (from config), and endpoints change. You've already built the pattern.
+**The Topic 10 link:** this named-client-plus-typed-wrapper is exactly what `PaymentProcessorClient` becomes — only the client name (`HttpClientNames.PaymentProcessor`), base URL (from config), and endpoints change. You've already built the pattern.
 
-**Interview talking point:** "I never `new` an `HttpClient`. I register a named client via `IHttpClientFactory` so the base URL and handler are configured once and the connection pool is reused — otherwise you get socket exhaustion under load. The typed wrapper keeps deserialization and error handling in one place."
+**Interview talking point:** "I never `new` an `HttpClient`. I register a named client via `IHttpClientFactory` so the base URL and handler are configured once and the connection pool is reused — otherwise you get socket exhaustion under load. `AddHttpClient` registers the factory itself, so there's no separate wiring. And I keep the client name in a `const` rather than a raw string, so a mismatch between registration and consumer is a compile error instead of a `BaseAddress`-less client that fails on the first request. The typed wrapper keeps deserialization and error handling in one place."
 
 ---
 

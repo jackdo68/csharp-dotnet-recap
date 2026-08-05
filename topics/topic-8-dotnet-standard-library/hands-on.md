@@ -378,7 +378,24 @@ This is the one that matters most: a **real** outbound call from PaymentApp, usi
 
 **Solution**
 
-**Step 1:** Create `src/PaymentApp.Infrastructure/Clients/ExchangeRateClient.cs`:
+**Step 1:** Add the HTTP factory package to the Infrastructure project.
+
+`IHttpClientFactory` is **not** part of the base framework — it ships in the `Microsoft.Extensions.Http` NuGet package. The `Api` project already has it *transitively* (the ASP.NET Core `Microsoft.NET.Sdk.Web` metapackage pulls it in), but `ExchangeRateClient` lives in `PaymentApp.Infrastructure`, a plain class library on `Microsoft.NET.Sdk` — which gets no such freebie. Skip this step and the `IHttpClientFactory` reference in the next file fails to compile with:
+
+```
+error CS0246: The type or namespace name 'IHttpClientFactory' could not be
+found (are you missing a using directive or an assembly reference?)
+```
+
+From the Infrastructure project folder, add the package:
+
+```bash
+dotnet add src/PaymentApp.Infrastructure package Microsoft.Extensions.Http
+```
+
+> **Node anchor:** this is your `npm install` — `dotnet add package` ≈ `npm install <pkg>`, and the `using` in the next file ≈ the `import`. The subtlety with no TS equivalent: .NET flows a project's dependencies *down its reference chain* at compile time, so the `Api` project shared this package with everything it referenced — you only hit the wall the moment you use the type in a library that sits **upstream** of the Api, where that sharing doesn't reach. The interface's namespace is `System.Net.Http`, already in the SDK's implicit usings, so once the package is referenced you need no extra `using` line — the missing **assembly reference**, not a missing using, was the real gap.
+
+**Step 2:** Create `src/PaymentApp.Infrastructure/Clients/ExchangeRateClient.cs`:
 
 ```csharp
 using System.Net.Http.Json;
@@ -417,7 +434,7 @@ public class ExchangeRateClient
 }
 ```
 
-**Step 2:** Register the named client and the typed client in `Program.cs`:
+**Step 3:** Register the named client and the typed client in `Program.cs`:
 
 ```csharp
 // Named HttpClient for the FX service. Same IHttpClientFactory pattern Topic 10
@@ -430,7 +447,7 @@ builder.Services.AddHttpClient("fx", client =>
 builder.Services.AddScoped<ExchangeRateClient>();
 ```
 
-**Step 3:** Inject it into `DocumentService` and use it in the statement. Update the constructor:
+**Step 4:** Inject it into `DocumentService` and use it in the statement. Update the constructor:
 
 ```csharp
 using PaymentApp.Infrastructure.Clients;   // add at the top

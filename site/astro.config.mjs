@@ -5,7 +5,7 @@ import starlight from '@astrojs/starlight';
 // GitHub Pages project site: https://jackdo68.github.io/csharp-dotnet-recap/
 export default defineConfig({
   site: 'https://jackdo68.github.io',
-  base: '/csharp-dotnet-recap',
+  base: '/csharp-dotnet-recap/',
   integrations: [
     starlight({
       title: 'C# .NET Recap',

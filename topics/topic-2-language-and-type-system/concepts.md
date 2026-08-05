@@ -356,6 +356,43 @@ Two footnotes that trip people up:
 - **Top-level statements are sugar.** Modern `Program.cs` lets you write executable lines — and even a `void Greet()` — with no visible class. The compiler wraps it all in an auto-generated `Main` inside a hidden class, so the rule still holds underneath: a top-level helper is really a *local function* inside `Main`.
 - **A local function is a method, not a delegate.** A helper you nest inside another method (say a `bool IsValid(...)` used only there) isn't a `Func<>` — it's a real, optionally `static`, method with no per-call allocation, and it can be called *before* its own declaration (unlike `var f = () => ...`, which must be declared first). Prefer it for named local helpers; reach for `Func`/`Action` only when you genuinely need a *value* to pass around or store.
 
+## Not every type is a `class` — and the two ways C# "unifies" everything
+
+The rule from the last section — *every member lives inside a type* — gets misremembered as "in C# everything is a class." Two corrections make it precise, and together they're the whole mental model of how C# organizes things versus how JS/TS does.
+
+**1. "Type" is broader than "class."** A member must belong to a *named type*, but that type can be a `class`, `struct`, `enum`, `record`, `interface`, or `delegate`. `class` is merely the most common. So the organizational law is "no free-floating members" — not "everything is a class."
+
+**2. `enum` is integer-backed — which is *why* a bag of string constants is a `static class`, not an enum.** A C# `enum` is a set of named **integer** constants:
+
+```csharp
+enum Currency { Usd, Eur, Gbp }   // Usd = 0, Eur = 1, Gbp = 2 — the members ARE ints
+```
+
+You cannot give an enum member a string value — `enum { Fx = "fx" }` is a compile error. This is a real gap vs TS, where enums *can* be string-valued (`enum X { Fx = 'fx' }`). So in C#, when you need a set of named **string** constants — like the named-`HttpClient` keys you'll write in Topic 8 — the idiom is a `static class` full of `public const string`:
+
+```csharp
+public static class HttpClientNames
+{
+    public const string Fx = "fx";
+    public const string PaymentProcessor = "processor";
+}
+```
+
+`static` on the class means **no instances, ever** (`new HttpClientNames()` won't compile) — it's purely a container. It's C#'s spelling of a TS frozen constants object:
+
+```ts
+export const HttpClientNames = { Fx: 'fx', PaymentProcessor: 'processor' } as const;
+```
+
+Same job — one source of truth for named values so a typo can't drift — but TS puts it at module scope while C# must wrap it in a type.
+
+**3. The deeper unifier is `System.Object`, and it runs *deeper* than JS's "everything is an object."** Every type in .NET — including `int`, `bool`, your `enum`, and every `struct` — derives from `System.Object`. That's why `42.ToString()` works and an `int` genuinely has a base class. In JS, primitives (`number`, `boolean`) are **not** objects; the engine temporarily boxes them in a wrapper only when you call a method on one. C# boxes value types too (see Structs above), but the hierarchy is unified from the start — `object` is the real root of *everything*, value types included.
+
+So the honest two-liner for your instinct that "in TS everything bottoms out in object/function, in C# everything is a class":
+
+- **JS unifies at runtime around the object** (and a function *is* an object).
+- **C# unifies in the type system around `System.Object`** — but organizationally it insists every member live inside a *named type*, and `static class` is how you make a type whose only job is to hold constants or utility functions.
+
 ## Namespaces — how code finds other code
 
 ```csharp
@@ -401,3 +438,5 @@ One more TS habit to drop: C# interfaces are used almost only as *behaviour cont
 - "`decimal` and `DateTime` are structs — value types I could have defined myself. C# doesn't have a magic 'primitive' category like JS; it has value types vs reference types, and `struct` vs `class` is how you pick a side."
 - Heap vs stack: "reference types live on the GC heap and pass by reference like JS objects; value types live inline on the stack (or inside their owner) and copy — that's the physical reason a `struct` copies and a `class` shares."
 - Functions vs methods: "C# has no free-standing functions — every method lives in a type. A `static` method is the plain-function equivalent; a `Func`/`Action` lambda is a function *value* you pass around; a local function is a real nested method, not a delegate."
+- Everything lives in a type, but not everything is a class: "members must belong to a named type — `class`, `struct`, `enum`, `record`, `interface`. Enums are integer-backed, so for named *string* constants I use a `static class` of `const string` (C#'s version of a TS `as const` object), not an enum."
+- The real root is `System.Object`: "JS unifies around the object at runtime; C# unifies around `System.Object` in the type system — and more deeply, because even `int`, `enum`, and `struct` derive from it, whereas JS primitives aren't objects until they're boxed."

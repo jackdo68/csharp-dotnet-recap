@@ -725,7 +725,7 @@ Verify all three cases work:
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use `[Authorize]` to require authentication, then check ownership by comparing the token's `sub` claim to the request body."
 - "401 means authentication failed (who are you?). 403 means authorization failed (you're not allowed)."

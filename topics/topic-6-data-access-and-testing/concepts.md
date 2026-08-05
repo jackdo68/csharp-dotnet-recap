@@ -3,7 +3,7 @@
 > **What is EF Core actually doing — and how does DI make the data layer testable?**
 
 Topic 5 wired the database cookbook-style. This topic opens the hood:
-- How `DbContext` and change tracking work
+- How `DbContext` and **change tracking** work
 - What migration files contain
 - How LINQ becomes SQL
 - How to test with a fake database (no Docker needed)
@@ -46,7 +46,9 @@ public class PaymentDbContext : DbContext
 | You *declare* the write: `update({ data })` | You *mutate* the entity: `user.Balance -= 100` |
 | Each call = round trip | Changes accumulate, flush with `SaveChangesAsync` |
 
-⚠️ **Classic EF bug:** mutating an untracked entity saves nothing.
+:::caution
+Mutating an untracked entity saves nothing. This is a classic EF bug — the change tracker only diffs entities it already knows about.
+:::
 
 ## Staged writes: the git analogy
 
@@ -135,7 +137,9 @@ if (await _db.Users.AnyAsync(u => u.Email == email)) throw ...;  // ❌ race con
 await _db.Users.AddAsync(user);
 ```
 
-Check-then-insert = two steps. Two simultaneous registrations can both pass the check, then both insert. The unique index acts atomically at write time. (Topic 7 expands on this.)
+:::caution
+Check-then-insert is two steps. Two simultaneous registrations can both pass the check, then both try to insert — the *race condition* the comment flags. The unique index is what actually stops it: it enforces the rule atomically at write time. Topic 7 expands on this.
+:::
 
 ## LINQ-to-SQL
 
@@ -210,11 +214,13 @@ public class PaymentServiceTests
 | No mocking framework | Constructor injection — pass fake `DbContext` directly |
 | Isolated tests | Fresh DB per test (`Guid.NewGuid()`) |
 
-**Trade-off:** In-memory DB won't catch Postgres-specific issues (unique constraints, locking behavior). Use integration tests for those.
+:::note
+**Trade-off:** an in-memory DB won't catch Postgres-specific issues — unique constraints, locking behavior. Use integration tests for those.
+:::
 
 **The punchline:** `PaymentService` never knows if it got real Postgres or a fake. Constructor injection = the whole mocking story.
 
-## Interview talking points
+## Recap
 
 - **DbContext:** Unit of work + change tracker. `DbSet<T>` = table. `SaveChangesAsync` = diff and commit.
 - **EF vs Prisma:** EF tracks changes (mutate → save). Prisma declares writes (`update({ data })`). Mutating untracked objects saves nothing.

@@ -2,7 +2,7 @@
 
 > **What changes when my code can genuinely run on many threads at once?**
 
-This topic explains why .NET's threading model is fundamentally different from Node's, and how to write correct concurrent code.
+This topic explains why .NET's threading model is fundamentally different from Node's. You'll learn how to write correct concurrent code.
 
 ---
 
@@ -52,7 +52,9 @@ Node has concurrency (many tasks, one thread). .NET has both (many tasks, many t
 | **Context switching** | None (one thread) | Yes (OS switches threads) |
 | **Best for** | Many I/O-bound connections | Mixed I/O + CPU workloads |
 
-**The danger:** If all threads are blocked (e.g., `.Result` calls or slow sync code), the pool is exhausted → requests queue up → timeouts.
+:::caution
+If all threads are blocked (`.Result` calls or slow sync code), the pool is exhausted. Requests queue up. Timeouts follow.
+:::
 
 ---
 
@@ -141,7 +143,7 @@ This is true parallelism — impossible on Node's single thread.
 
 ## Race conditions
 
-Two threads touching the same variable = race condition.
+Two threads touching the same variable cause a **race condition**.
 
 **The bug:** `counter++` is actually three operations:
 
@@ -165,7 +167,11 @@ await _db.SaveChangesAsync();                           // WRITE: both write 790
                                                         // ❌ One $10 debit lost!
 ```
 
-Same bug as `counter++` — read-modify-write without coordination. **You can print money.**
+Same bug as `counter++` — read-modify-write without coordination.
+
+:::danger
+You can print money.
+:::
 
 ---
 
@@ -220,7 +226,9 @@ public void AddToTotal(decimal amount)
 | Accumulating results | `lock (_results) { _results.Add(item); }` |
 | Thread-safe counters | When you need multiple operations (read + check + update) |
 
-**Limitation:** Can't contain `await` — compiler error CS1996. Why? After `await`, a different thread may resume, but `lock` must be released by the same thread that acquired it.
+:::caution
+`lock` can't contain `await` — compiler error CS1996. After `await`, a different thread may resume. But `lock` must be released by the same thread that acquired it.
+:::
 
 ### 3. `SemaphoreSlim` — async critical section
 
@@ -268,7 +276,9 @@ public async Task TransferAsync(...)
 - Has `await` inside? → `SemaphoreSlim`
 - No `await`? → `lock` (simpler, slightly faster)
 
-**Limitation:** Only works **within one process**. Multiple API replicas = each has its own gate = race returns. Production fix: database row locks (`SELECT ... FOR UPDATE`) or optimistic concurrency. We address this in Topic 10.
+:::note
+`SemaphoreSlim` only works **within one process**. With multiple API replicas, each one has its own gate, so the race returns. The production fix is database row locks (`SELECT ... FOR UPDATE`) or optimistic concurrency — Topic 10 covers this.
+:::
 
 ---
 
@@ -383,7 +393,9 @@ var user = _db.GetUserAsync().GetAwaiter().GetResult();
 _db.SaveChangesAsync().Wait();
 ```
 
-**How it works:** Your thread stops and waits. Meanwhile, another thread pool thread completes the async operation. When it's done, your thread wakes up and continues. This is impossible in Node — there's no "another thread" to do the work.
+**How it works:** Your thread stops and waits. Meanwhile, another thread pool thread completes the async operation. When it's done, your thread wakes up and continues.
+
+This is impossible in Node — there's no "another thread" to do the work.
 
 ### Why you should almost never use them
 
@@ -442,7 +454,7 @@ Controller (async) → Service (async) → Repository (async) → DbContext (asy
 
 ---
 
-## Interview talking points
+## Recap
 
 - **Thread pool:** Not a new thread per request. Pool starts at ~1 per core, reuses threads. During `await`, thread returns to pool.
 - **Concurrency vs parallelism:** Node has concurrency; .NET has both. `await` can resume on a different thread.

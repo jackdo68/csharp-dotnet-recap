@@ -708,7 +708,7 @@ PaymentApp/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "The DI container validates the dependency graph at startup. A singleton can't depend on a scoped service — the container refuses to start."
 - "DbContext is scoped because each request needs its own unit of work. A singleton DbContext would share state across requests and isn't thread-safe."

@@ -477,7 +477,7 @@ docker-compose exec db psql -U payapp -d payapp \
 
 ---
 
-## Interview talking points
+## Recap
 
 - "DbContext is a unit of work. It tracks changes and flushes them in one transaction on `SaveChangesAsync()`."
 - "Entity IDs are 0 until after `SaveChangesAsync()` — EF uses `INSERT ... RETURNING` to get them."

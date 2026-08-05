@@ -186,7 +186,9 @@ public class MyService
 
 ## The "localhost lie"
 
-**Common mistake:** Using `localhost` in containers.
+:::caution
+Don't use `localhost` inside a container to reach another container. It doesn't point where you think.
+:::
 
 ```
 Your machine:  localhost = your machine
@@ -203,13 +205,13 @@ ConnectionStrings__PaymentDb: "Host=localhost;Database=payapp;..."
 ConnectionStrings__PaymentDb: "Host=db;Database=payapp;..."
 ```
 
-Docker creates a network where services can find each other by name. `db` is the name of the database service, so use that.
+Docker creates a network where services can find each other by name. `db` is the name of the database service. Use that instead.
 
 ---
 
 ## Calling an external payment processor
 
-Back in Topic 7 we protected the transfer with a `static SemaphoreSlim` — a **mutex inside one process**. That is correct for exactly one API instance. But the whole point of Docker + compose is that scaling out is trivial, and the moment you run a second replica the guarantee evaporates:
+Back in Topic 7, we protected the transfer with a `static SemaphoreSlim` — a **mutex inside one process**. That's correct for exactly one API instance. But the whole point of Docker + compose is that scaling out is trivial. The moment you run a second replica, the guarantee evaporates:
 
 ```
    Replica A            Replica B
@@ -240,7 +242,7 @@ There is no window between the check and the write — Postgres evaluates the `W
 
 ### Why a separate service?
 
-In real payment systems, the code that actually moves money is usually a **dedicated, narrowly-scoped service** (often PCI-scoped, separately audited, deployed on its own cadence) that everything else calls over HTTP. PaymentApp models that with a tiny **payment-processor** that owns the balance mutation and exposes two endpoints:
+In real payment systems, the code that actually moves money is usually a **dedicated, narrowly-scoped service**. It's often PCI-scoped, separately audited, and deployed on its own cadence — everything else calls it over HTTP. PaymentApp models that with a tiny **payment-processor** that owns the balance mutation and exposes two endpoints:
 
 | Endpoint | Body | Returns | What it does |
 |----------|------|---------|--------------|
@@ -260,23 +262,27 @@ builder.Services.AddHttpClient("processor", client =>
 });
 ```
 
-This is where the **"localhost lie" bites again**: in compose the base URL is `http://processor:4000` — the **service name**, not `localhost`. Inside the api container, `localhost` is the api container itself; the processor lives at hostname `processor`.
+This is where the **"localhost lie" bites again**. In compose, the base URL is `http://processor:4000` — the **service name**, not `localhost`. Inside the api container, `localhost` is the api container itself; the processor lives at hostname `processor`.
 
-Your mental anchor is `fetch`/`axios` for `HttpClient`, and a named client is just a pre-configured axios instance (`axios.create({ baseURL })`) that DI hands you already wired.
+Your mental anchor is `fetch`/`axios` for `HttpClient`. A named client is just a pre-configured axios instance (`axios.create({ baseURL })`) that DI hands you, already wired.
 
 ### PaymentApp as the merchant: the Transaction ledger
 
-The processor owns *balances*; PaymentApp owns the *record*. It sits in the middle as the merchant and writes a `Transaction` row per processor call — so one transfer produces **two** ledger rows (a `Withdraw` leg for the payer, a `Deposit` leg for the payee) sharing one `TransferId`. Each row runs a small lifecycle:
+The processor owns *balances*; PaymentApp owns the *record*. It sits in the middle as the merchant, and writes a `Transaction` row per processor call. One transfer produces **two** ledger rows — a `Withdraw` leg for the payer, a `Deposit` leg for the payee — sharing one `TransferId`. Each row runs a small lifecycle:
 
 ```
 Pending ──(processor answers)──▶ Successful | Failed
 ```
 
-The row is created `Pending` *before* the HTTP call (so the intent is durable), then flipped to `Successful`/`Failed` once the processor responds — stamped with the `ExternalTransactionId` it returned and the raw reply kept verbatim in a `jsonb` column for audit. Enums (`Type`, `Status`) are stored as **text** (`HasConversion<string>()`) so `psql` reads `Pending`/`Withdraw` and reordering the enum can't silently change stored meaning. This "write intent, then confirm" shape is the seed of the outbox pattern (Topic 12).
+The row is created `Pending` *before* the HTTP call, so the intent is durable. Once the processor responds, it flips to `Successful` or `Failed` — stamped with the `ExternalTransactionId` it returned, with the raw reply kept verbatim in a `jsonb` column for audit. Enums (`Type`, `Status`) are stored as **text** (`HasConversion<string>()`), so `psql` reads `Pending`/`Withdraw` and reordering the enum can't silently change stored meaning. This "write intent, then confirm" shape is the seed of the outbox pattern (Topic 12).
 
 ### Honest tradeoff — this fixes the balance race, not cross-account atomicity
 
-A transfer is now **two** calls: withdraw from the payer, then deposit to the payee. Each call is atomic on its own row and both survive multiple replicas — but the *pair* is not one transaction. If the deposit fails after the withdraw succeeds, money has left the payer and not arrived. PaymentApp keeps this simple (it compensates by refunding the payer on failure), but the production-grade answer is **idempotency keys + a compensating transaction, or the outbox pattern**, so the two steps reliably reconcile. That's exactly the territory Topic 12 covers.
+A transfer is now **two** calls: withdraw from the payer, then deposit to the payee. Each call is atomic on its own row, and both survive multiple replicas — but the *pair* is not one transaction.
+
+:::danger
+If the deposit fails after the withdraw succeeds, money has left the payer and not arrived. PaymentApp keeps this simple — it compensates by refunding the payer on failure — but the production-grade answer is **idempotency keys + a compensating transaction, or the outbox pattern**, so the two steps reliably reconcile. That's exactly the territory Topic 12 covers.
+:::
 
 ---
 
@@ -402,7 +408,7 @@ This makes builds faster and images smaller.
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use multi-stage Docker builds to keep the final image small — only the runtime, not the SDK."
 - "docker-compose is for local dev with multiple services. In production, I'd use Kubernetes or a managed container service."

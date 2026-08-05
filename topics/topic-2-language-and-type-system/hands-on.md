@@ -471,7 +471,7 @@ src/PaymentApp.Domain/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use `decimal` for money, never `float` or `double`. Binary floating point can't represent 0.1 exactly, and you never want rounding errors in financial calculations."
 - "Records give me value-based equality and immutability by default — perfect for DTOs and value objects."

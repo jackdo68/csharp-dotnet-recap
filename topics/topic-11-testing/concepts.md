@@ -2,7 +2,7 @@
 
 > **How do I write tests in .NET, and what are the common patterns?**
 
-This topic covers testing in .NET: the frameworks, how to write different types of tests, and how to test things that depend on databases or external services.
+This topic covers testing in .NET. You'll learn the frameworks, how to write different types of tests, and how to test code that depends on databases or external services.
 
 ---
 
@@ -86,7 +86,9 @@ public class CalculatorTests
 }
 ```
 
+:::tip
 **Test naming convention:** `MethodName_Scenario_ExpectedResult`
+:::
 
 ### Multiple test cases with [Theory]
 
@@ -148,7 +150,7 @@ Assert.Collection(list,
 
 ## Mocking (faking dependencies)
 
-When testing, you often need to replace real dependencies with fake ones. This is called "mocking."
+When testing, you often need to replace real dependencies with fake ones. This practice is called *mocking*.
 
 ### Why mock?
 
@@ -221,7 +223,7 @@ mock.Verify(x => x.Delete(1), Times.Never);
 
 ### Unit tests
 
-Test one piece of code in isolation (no database, no HTTP):
+Test one piece of code in *isolation* — no database, no HTTP:
 
 ```csharp
 public class UserTests
@@ -435,7 +437,7 @@ public class UserTests
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use xUnit for testing because it's the modern standard in .NET. The concepts are similar to Jest — `[Fact]` is like `it()`, `[Theory]` is like `test.each()`."
 - "I mock dependencies with Moq. For example, I mock the database repository so unit tests run fast and don't need a real database."

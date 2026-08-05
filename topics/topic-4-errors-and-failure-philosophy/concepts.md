@@ -6,13 +6,21 @@
 
 ## Your compile-time experience carries over almost 1:1
 
-Strict TS already catches what the C# compiler catches: typo'd property (`TS2551` ↔ `CS1061`), wrong argument type (`TS2345` ↔ `CS0029`), unhandled null (`TS2532` ↔ `CS8602`). The red squiggles feel identical. This topic is **not** about compile-time — you lose nothing there.
+Strict TS already catches what the C# compiler catches:
+
+- Typo'd property (`TS2551` ↔ `CS1061`)
+- Wrong argument type (`TS2345` ↔ `CS0029`)
+- Unhandled null (`TS2532` ↔ `CS8602`)
+
+The red squiggles feel identical. This topic is **not** about compile-time — you lose nothing there.
 
 ## The real difference: what happens when the types are wrong anyway
 
-TS types are erased before the program runs (Topic 3), so they're a promise the runtime can't enforce — every `as`, `any`, `res.json()`, env var, and DB row is a spot where reality can diverge from the declared type. When it does, plain-JS behaviour takes over: `undefined` and `NaN` sentinels drifting through your code until something explodes far from the cause.
+TS types are erased before the program runs (Topic 3). They're a promise the runtime can't enforce. Every `as`, `any`, `res.json()`, env var, and DB row is a spot where reality can diverge from the declared type.
 
-C# types are enforced *by the runtime*, so the lie gets caught **at the boundary**, as a typed exception naming the actual problem.
+When that happens, plain-JS behavior takes over. `undefined` and `NaN` sentinels drift through your code until something explodes far from the cause.
+
+C# types are enforced *by the runtime*. So the lie gets caught **at the boundary** — as a typed exception naming the actual problem.
 
 | The situation | TS + Node at runtime | C#/.NET at runtime |
 |---|---|---|
@@ -51,7 +59,8 @@ catch (Exception ex) when (ex.Message.Contains("timeout"))   // 'when' filters �
 }
 ```
 
-Upgrade 1: **multiple catch blocks by exception type** — the runtime routes to the right one; no `instanceof` ladder inside a single catch. Upgrade 2: **`when` filters** for conditional catching.
+- **Upgrade 1 — multiple catch blocks by exception type.** The runtime routes to the right one. No `instanceof` ladder inside a single catch.
+- **Upgrade 2 — `when` filters.** Catch conditionally.
 
 ## The Try-pattern and `out` parameters (new syntax)
 
@@ -64,9 +73,17 @@ else
     Console.WriteLine("Not a number — no exception thrown");
 ```
 
-`out var amount` declares `amount` right in the call. TS has nothing like `out` (you'd return a tuple or `number | null`); it exists here for exactly this pattern. Pairs to know: `int.TryParse`/`int.Parse`, `dict.TryGetValue`/`dict[...]`, `FirstOrDefault`/`First`. **Expected failures → Try-pattern; exceptional failures → exceptions.** Choosing correctly is the everyday craft.
+`out var amount` declares `amount` right in the call. TS has nothing like `out` — you'd return a tuple or `number | null` instead. It exists here for exactly this pattern.
 
-## Interview talking points
+Pairs to know:
+
+- `int.TryParse` / `int.Parse`
+- `dict.TryGetValue` / `dict[...]`
+- `FirstOrDefault` / `First`
+
+**Expected failures → Try-pattern; exceptional failures → exceptions.** Choosing correctly is the everyday craft.
+
+## Recap
 
 - "TS and C# give the same compile-time safety, but TS types are erased and trust-based while C#'s are enforced at runtime" — the one-liner.
 - Zod/io-ts/class-validator exist because TS types vanish; the .NET deserializer, casts, and collections do that enforcement natively.

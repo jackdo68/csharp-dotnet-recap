@@ -140,7 +140,7 @@ In TypeScript/Express, you'd do `res.status(400).json({...})` — same idea, dif
 
 ### Where does a request bind from? (body / route / query)
 
-The `Register(RegisterRequest request)` above never says *where* `request` comes from — `[ApiController]` **infers** the source from the parameter's type and the route template:
+The `Register(RegisterRequest request)` above never says *where* `request` comes from. Instead, `[ApiController]` **infers** the source from the parameter's type and the route template:
 
 | Parameter | Inferred source | Attribute | Wire location |
 |-----------|-----------------|-----------|---------------|
@@ -161,9 +161,12 @@ public IActionResult Transfer(
     TransferBody body)                  // [FromBody] — complex type, inferred
 ```
 
-Two rules: **only one `[FromBody]` per action** (the body stream deserializes once), and **never** put secrets like `Password` in route/query (URLs get logged and cached) — that's why the auth DTOs are body-bound.
+Two rules apply here:
 
-> **Node/TS anchor:** this is Express's `req.body` / `req.params` / `req.query`, or NestJS's `@Body()` / `@Param()` / `@Query()` — same three sources. The C# nicety: `[ApiController]` infers the common cases, so you drop the `@Body()`/`@Param()` boilerplate. Without `[ApiController]` there's no inference and you write `[FromBody]` yourself.
+- **Only one `[FromBody]` per action** — the body stream deserializes once.
+- **Never** put secrets like `Password` in route/query. URLs get logged and cached — that's why the auth DTOs are body-bound.
+
+> **Node/TS anchor:** this is Express's `req.body` / `req.params` / `req.query`, or NestJS's `@Body()` / `@Param()` / `@Query()` — same three sources. The C# nicety: `[ApiController]` infers the common cases, so you drop the `@Body()`/`@Param()` boilerplate. Without `[ApiController]`, there's no inference, and you write `[FromBody]` yourself.
 
 ### New syntax cheat sheet
 
@@ -195,8 +198,8 @@ Those five lines are **two different kinds of method**, and it matters:
 | **Feature bundles** | `AddControllers`, `AddDbContext` | *Many* registrations + config, built on top of the primitives |
 
 - `AddScoped<IAuthService, AuthService>()` is a primitive — one service, one lifetime.
-- `AddDbContext<PaymentDbContext>(…)` is a bundle that **internally calls `AddScoped`** (Scoped is its default) and also wires up `DbContextOptions` with your provider/connection string. That's *why* `DbContext` shows up under Scoped below — `AddDbContext` **is** a scoped registration, it just doesn't say so on the tin.
-- `AddControllers()` isn't a lifetime registration at all — it turns on the whole MVC subsystem (routing, model binding, JSON). And the twist: your controllers are **not** registered in the container by default; a per-request *controller activator* creates them (pulling their constructor deps from DI). So a controller behaves "new per request" through a different mechanism than `AddScoped`.
+- `AddDbContext<PaymentDbContext>(…)` is a bundle that **internally calls `AddScoped`** (Scoped is its default). It also wires up `DbContextOptions` with your provider/connection string. That's *why* `DbContext` shows up under Scoped below — `AddDbContext` **is** a scoped registration, it just doesn't say so on the tin.
+- `AddControllers()` isn't a lifetime registration at all — it turns on the whole MVC subsystem (routing, model binding, JSON). And here's the twist: your controllers are **not** registered in the container by default. A per-request *controller activator* creates them instead, pulling their constructor deps from DI. So a controller behaves "new per request" through a different mechanism than `AddScoped`.
 
 > **Node/TS anchor:** the primitives are NestJS's `@Injectable({ scope })` — one provider, one lifetime. The bundles are the module `imports` (`TypeOrmModule.forRoot()`, `JwtModule.register()`) — a feature module that registers a pile of providers with sensible lifetimes for you. `AddDbContext` speaks "scoped"; `AddControllers` speaks "wire up MVC."
 
@@ -208,7 +211,9 @@ Those five lines are **two different kinds of method**, and it matters:
 | `AddTransient` | New instance every time | Lightweight, stateless helpers |
 | `AddSingleton` | One instance for app lifetime | Stateless, thread-safe utilities |
 
-**The mechanism — a "scope" is one HTTP request.** ASP.NET Core opens a fresh DI scope when a request arrives and disposes it when the response is sent. That single fact defines all three lifetimes, and the load-bearing difference between **Scoped and Transient** is *sharing within a single request*:
+**The mechanism — a "scope" is one HTTP request.** ASP.NET Core opens a fresh DI scope when a request arrives, and disposes it when the response is sent. That single fact defines all three lifetimes.
+
+The load-bearing difference between **Scoped and Transient** is *sharing within a single request*:
 
 | Lifetime | New instance… | Same instance reused within one request? | Lives until |
 |----------|---------------|------------------------------------------|-------------|
@@ -216,19 +221,25 @@ Those five lines are **two different kinds of method**, and it matters:
 | `AddScoped` | once **per request** | **yes** — everyone in that request shares it | end of request |
 | `AddTransient` | **every time it's injected** | **no** — each injection gets its own | GC (as soon as unused) |
 
-- **Scoped** — ask for the service five times in one request (five constructors that depend on it) and you get the **same** instance all five times. That's *why* `DbContext` is scoped: every service/repository in a request shares one context, so they share **one change tracker and one transaction** (the Topic 6 unit-of-work). Make it Transient and each repository would get its *own* `DbContext` — separate change trackers, and `SaveChanges` in one wouldn't see the entities added in another. A real bug, not a preference.
+- **Scoped** — ask for the service five times in one request (five constructors that depend on it) and you get the **same** instance all five times. That's *why* `DbContext` is scoped: every service/repository in a request shares one context, so they share **one change tracker and one transaction** (the Topic 6 unit-of-work). Make it Transient instead, and each repository would get its *own* `DbContext` — separate change trackers, and `SaveChanges` in one wouldn't see the entities added in another. That's a real bug, not a preference.
 - **Transient** — each of those injection sites gets its **own fresh** instance. Correct for **stateless** helpers where sharing buys nothing: a validator, a formatter, a typed `HttpClient` wrapper (Topic 8). No per-request state to share, so a fresh one per injection costs nothing.
 
-**So aren't Scoped and Transient "roughly the same"?** Only when a service is injected **once** per request — then both hand you one fresh object for that request and both dispose at its end; they're indistinguishable. The gap opens the moment the object graph resolves the service **more than once in the same request**:
+**So aren't Scoped and Transient "roughly the same"?** Only when a service is injected **once** per request. Then both hand you one fresh object for that request, both dispose at its end, and they're indistinguishable. The gap opens the moment the object graph resolves the service **more than once in the same request**:
 
 | | Injected **once** per request | Injected **N times** in one request |
 |---|---|---|
 | **Scoped** | 1 instance | **still 1** — shared across all N |
 | **Transient** | 1 instance | **N** — a fresh one at each site |
 
-Concretely: a request hits a controller, and both `PaymentService` and `AuditService` in that request depend on `DbContext`. **Scoped** resolves it once and gives both the *same* context (one change tracker — a change staged in one is visible to the other, one `SaveChanges` commits both). **Transient** gives each its *own* context, so `PaymentService` stages an entity, `AuditService` calls `SaveChanges`, and the entity isn't there — it's tracked by the other context. Same request; the graph just asked for `DbContext` twice. So it's not the number of *requests* that distinguishes them — it's the number of *resolutions within* a request. Think of the scope as a per-request `Map` keyed by type: **Scoped** = `map.get(type) ?? new X()` (memoized for the request), **Transient** = `new X()` every call. Call it once and memoized-vs-not looks the same; call it twice and the memoization is the whole difference.
+Concretely: a request hits a controller, and both `PaymentService` and `AuditService` in that request depend on `DbContext`. **Scoped** resolves it once and gives both the *same* context — one change tracker, so a change staged in one is visible to the other, and one `SaveChanges` commits both. **Transient** gives each its *own* context: `PaymentService` stages an entity, `AuditService` calls `SaveChanges`, and the entity isn't there — it's tracked by the other context.
 
-> ⚠️ **"Transient = disposed instantly" is a slight oversimplification.** A Transient service that implements `IDisposable` and is resolved from the request scope is still **tracked and disposed at the end of the request**, not the moment you stop using it — so resolving a disposable Transient many times in a long request can pile up until the request ends.
+Same request; the graph just asked for `DbContext` twice. So it's not the number of *requests* that distinguishes them — it's the number of *resolutions within* a request.
+
+Think of the scope as a per-request `Map` keyed by type: **Scoped** = `map.get(type) ?? new X()` (memoized for the request), **Transient** = `new X()` every call. Call it once, and memoized-vs-not looks the same. Call it twice, and the memoization is the whole difference.
+
+:::caution
+**"Transient = disposed instantly" is a slight oversimplification.** A Transient service that implements `IDisposable` and is resolved from the request scope is still **tracked and disposed at the end of the request**, not the moment you stop using it. Resolving a disposable Transient many times in a long request can pile up until the request ends.
+:::
 
 > **Node/TS anchor:** vanilla Express has no request-scoped DI — you `import` a module and it's a de-facto singleton; "per request" state is whatever you hang off `req`. NestJS is the closer map: `Scope.DEFAULT` ≈ `AddSingleton`, `Scope.REQUEST` ≈ `AddScoped`, `Scope.TRANSIENT` ≈ `AddTransient`.
 
@@ -240,7 +251,11 @@ Concretely: a request hits a controller, and both `PaymentService` and `AuditSer
 | `AuthService`, `PaymentService` | Scoped | Hold scoped DbContext |
 | `IPasswordHasher<User>` | Singleton | Stateless, thread-safe |
 
-⚠️ **Captive dependency:** Never inject a Scoped or Transient service into a **Singleton**. The singleton is built once and holds that reference forever, so a scoped `DbContext` captured by a singleton *never gets disposed and never resets* — it effectively becomes a singleton too, and you get stale data or threading bugs. The rule: a service may only depend on things that live **at least as long** as it does — Singleton → Singleton only; Scoped → Scoped/Singleton; Transient → anything. ASP.NET Core's dev-time scope validation throws on the obvious Scoped-into-Singleton case at startup to catch this early.
+:::danger
+**Captive dependency:** never inject a Scoped or Transient service into a **Singleton**. The singleton is built once and holds that reference forever, so a scoped `DbContext` captured by a singleton *never gets disposed and never resets* — it effectively becomes a singleton too, and you get stale data or threading bugs.
+
+The rule: a service may only depend on things that live **at least as long** as it does — Singleton → Singleton only; Scoped → Scoped/Singleton; Transient → anything. ASP.NET Core's dev-time scope validation throws on the obvious Scoped-into-Singleton case at startup, to catch this early.
+:::
 
 **DbContext ≠ connection:**
 - `DbContext` (scoped) = session + change tracker — cheap, per-request
@@ -259,13 +274,15 @@ Concretely: a request hits a controller, and both `PaymentService` and `AuditSer
 
 **Node equivalent:** Module-level `new Pool()` / Prisma client = Tier 1. Handler locals = Tier 2.
 
-⚠️ **Fire-and-forget trap:**
+:::caution
+**Fire-and-forget trap:**
 
 ```csharp
 _ = Task.Run(() => useTheDbContext());  // ❌ DbContext disposed after response
 ```
 
-Fix: Create a fresh scope via `IServiceScopeFactory` (Topic 10).
+Fix: create a fresh scope via `IServiceScopeFactory` (Topic 10).
+:::
 
 ## Request lifecycle
 
@@ -278,7 +295,7 @@ Fix: Create a fresh scope via `IServiceScopeFactory` (Topic 10).
 | 5 | `await _db...` frees thread during DB round-trip |
 | 6 | Return object → JSON (camelCased) |
 
-## Interview talking points
+## Recap
 
 - **Three lifetimes:** Scoped (per-request), Transient (every time), Singleton (app lifetime). Know the captive dependency failure.
 - **Why DI:** Loose coupling + testability. Hand services a fake DB in tests (Topic 6).

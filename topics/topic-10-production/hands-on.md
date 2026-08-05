@@ -432,7 +432,7 @@ CMD ["node", "server.js"]
 | Quoted `"Users"`/`"Id"`/`"Balance"` | EF Core created PascalCase identifiers; unquoted names fold to lowercase in Postgres and wouldn't match. |
 | Separate service | Real payment systems isolate money movement in a narrowly-scoped, separately-deployed service. It also gives us a concrete `HttpClient` integration to build against. |
 
-**Interview talking point:** "An in-process lock only coordinates one process. To stay correct across replicas I pushed the money mutation into a single atomic SQL statement — `UPDATE ... WHERE Balance >= amount RETURNING Balance` — where the database itself is the arbiter."
+**Key takeaway:** "An in-process lock only coordinates one process. To stay correct across replicas I pushed the money mutation into a single atomic SQL statement — `UPDATE ... WHERE Balance >= amount RETURNING Balance` — where the database itself is the arbiter."
 
 ---
 
@@ -602,7 +602,7 @@ dotnet ef migrations add AddTransactions \
 
 > **No accidental foreign key:** `UserId` is a plain column — there's no `User` navigation on `Transaction` (and no `Transactions` collection on `User`), so EF Core won't infer a relationship. The balance lives in the processor's world; the ledger just references the user by id.
 
-**Interview talking point:** "Enums map to ints by default; I use `HasConversion<string>()` so the column reads as `Pending`/`Successful` and doesn't silently shift meaning if I reorder the enum. I also keep the processor's raw response in a `jsonb` column so failures stay auditable and queryable."
+**Key takeaway:** "Enums map to ints by default; I use `HasConversion<string>()` so the column reads as `Pending`/`Successful` and doesn't silently shift meaning if I reorder the enum. I also keep the processor's raw response in a `jsonb` column so failures stay auditable and queryable."
 
 ---
 
@@ -841,7 +841,7 @@ If Bob's deposit fails you instead get **three** rows under `abc-123`: the succe
 
 **Note the honest tradeoff:** a transfer is still two calls, not one atomic transaction. Writing the `Pending` row *before* the call makes intent durable — but a crash *between* the legs leaves a `Pending`/half-done transfer that a reconciler must finish. That's exactly why production reaches for **idempotency keys + an outbox** (Topic 12). The ledger you just built is the first half of that pattern: a durable, auditable record of intent.
 
-**Interview talking point:** "I write a `Pending` ledger row before each processor call and flip it to `Successful`/`Failed` after — so intent is durable and every external call is auditable via the stored transaction id and raw `jsonb` response. A crash mid-transfer leaves a `Pending` row a reconciler can finish, which is the seed of the outbox pattern."
+**Key takeaway:** "I write a `Pending` ledger row before each processor call and flip it to `Successful`/`Failed` after — so intent is durable and every external call is auditable via the stored transaction id and raw `jsonb` response. A crash mid-transfer leaves a `Pending` row a reconciler can finish, which is the seed of the outbox pattern."
 
 ---
 
@@ -1143,7 +1143,7 @@ PaymentApp/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use multi-stage builds to keep production images small — SDK for build, runtime for deployment."
 - "docker-compose is for local dev. In production, I'd use Kubernetes or ECS."

@@ -808,7 +808,7 @@ src/PaymentApp.Api/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I used `SemaphoreSlim` because the critical section contains `await` — `lock` would be a compiler error (CS1996)."
 - "The semaphore is `static` because the service is scoped. An instance field would give each request its own gate, which protects nothing."

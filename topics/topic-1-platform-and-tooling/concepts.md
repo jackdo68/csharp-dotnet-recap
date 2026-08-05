@@ -32,7 +32,7 @@ The CLR (Common Language Runtime) is .NET's execution engine. Think of it as wha
 | **Threading** | Single thread + event loop | Thread pool (multiple real threads) |
 | **Type information** | Erased at runtime | Preserved at runtime |
 
-The CLR is multi-language — it runs anything that compiles to its bytecode (C#, F#, VB.NET). So ".NET : C#" is like "JVM : Java", whereas Node only ever runs JavaScript.
+The CLR is multi-language. It runs anything that compiles to its bytecode — *IL (Intermediate Language)* — including C#, F#, and VB.NET. So ".NET : C#" is like "JVM : Java", whereas Node only ever runs JavaScript.
 
 ### What is the BCL?
 
@@ -68,7 +68,9 @@ What's in the folder (vs a Node project):
 | `bin/` | Compiled output | `dist/` |
 | `obj/` | Intermediate build files | Cache folders |
 
-**What's NOT there:** `node_modules`. NuGet packages live in a per-user global cache (`~/.nuget/packages`), referenced by the project, never copied in.
+:::note
+**What's NOT there:** `node_modules`. NuGet packages live in a per-user global cache (`~/.nuget/packages`). The project references them — it never copies them in.
+:::
 
 ### The csproj file explained
 
@@ -123,7 +125,7 @@ using PaymentApp.Domain.Entities;  // imports all types in this namespace
 | Barrel files (`index.ts`) | Namespaces |
 | Path aliases (`@/services`) | Project references |
 
-**Why this matters:** No relative-path spaghetti, no barrel files, no circular dependency headaches. Organization is by namespace, and the compiler finds the files itself.
+**Why this matters:** No relative-path spaghetti, no barrel files, no circular dependency headaches. Organization is by *namespace* — a named group of types — and the compiler finds the files itself.
 
 ## Solutions and projects
 
@@ -153,7 +155,7 @@ Projects reference each other with `<ProjectReference>`:
 </ItemGroup>
 ```
 
-This is like npm workspaces, but with compile-time enforcement: if Api references Application, Application can't reference Api back — the compiler will error.
+This is like npm workspaces, but with compile-time enforcement. If Api references Application, Application can't reference Api back — the compiler will error.
 
 ## The dotnet CLI
 
@@ -234,7 +236,9 @@ chmod +x script.cs
 dotnet project convert script.cs
 ```
 
-**Caveat:** This is new in .NET 10 (late 2025). Most codebases and interviewers won't know it. Treat it as scripting convenience — real work uses projects.
+:::caution
+This is new in .NET 10 (late 2025). Most codebases and interviewers won't know it. Treat it as scripting convenience — real work uses projects.
+:::
 
 ## Why .NET 10?
 
@@ -249,7 +253,7 @@ This course uses .NET 10, the current LTS (Long Term Support) release. Key featu
 | Global usings | Common namespaces auto-imported |
 | Nullable reference types | Null-safety by default |
 
-## Interview talking points
+## Recap
 
 - "C# is the language, .NET is the runtime and platform, `dotnet` is the CLI" — say it exactly like that.
 - The CLR is to C# what the JVM is to Java; Node by contrast runs only JS.

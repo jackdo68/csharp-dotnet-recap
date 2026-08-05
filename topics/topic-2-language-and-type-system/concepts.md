@@ -84,20 +84,22 @@ record Money(decimal Amount, string Currency);
 
 ## New syntax unpacked
 
-Every construct above that has no TS equivalent, mapped to what you know:
+Every construct in the tour above, mapped to what you already know. Scan the first column; the meatier ones each get their own **unpacked** section below.
 
-- **Numeric literal suffixes** — TS has one `number` type; C# has many, and a literal carries a type: `5.75` is a `double`, `5.75m` is a `decimal`, `500_000` is an `int`. The `m` isn't decoration — without it, `5.75` won't assign to a `decimal` at all. **Always `decimal` for money.**
-- **Nullability `string?`** — same idea as TS with `strictNullChecks`: plain `string` means "never null", `string?` means "nullable". `??` and `?.` work exactly as in TS. Difference: it's a compiler warning system on top of the type, not a separate union type like `string | null`.
-- **Properties `{ get; set; }`** — in a TS class you'd write `amount: number`. C#'s `public int Amount { get; set; }` declares a *property*: a hidden backing field plus auto-generated getter/setter. Used like a field (`app.Amount = 5`), but can later grow logic without changing callers. The `= "";` after it is a default value. (Unpacked fully in the next section — this one is worth slowing down for.)
-- **Object initializer** — `new Transfer { From = "Alice" }` *looks* like a TS object literal but isn't: it calls the constructor, then assigns those properties. You can only set members that exist on the declared type — no ad-hoc shapes.
-- **`new()` with no type name** — "target-typed new": inside a `List<Transfer>`, the compiler knows the element type, so `new() { ... }` omits it.
-- **Records** — `record Money(decimal Amount, string Currency);` generates a constructor, read-only properties, `ToString`, and **value-based equality**: two `Money` objects with the same values are equal (classes compare by reference, like JS objects). `with { Amount = 250m }` is C#'s spread-update: `{ ...money, amount: 250 }`.
-- **`List<T>`** — your everyday JS array: `.Add()`, `.Count`, grows dynamically. Fixed-size arrays (`int[]`) exist but `List<T>` is the default.
-- **LINQ** — `.Where`/`.Select`/`.Sum`/`.Aggregate` = `.filter`/`.map`/`.reduce`. Also `.FirstOrDefault(pred)` = `.find(pred)`, `.OrderByDescending(...)` = sort. Same idea, different names — you'll be fluent in an hour. (Full vocabulary and the two things it does that array methods can't: two sections down.)
-- **`Task` vs `Promise`** — same concept for daily use: `Task` = `Promise<void>`, `Task<T>` = `Promise<T>`. Async method names end in `Async` by convention. (The analogy has real cracks — completed Tasks await synchronously, continuations hop threads, `async` itself is optional on pass-throughs — Topic 7 breaks it down properly.)
-- **Local functions** — a function declared mid-file works like a hoisted named `function` in JS: callable before its declaration.
-- **Lambdas close over variables, and there is no `this` trap** — `t => t.Amount > 500m` captures surrounding variables exactly like a JS closure. What's *missing* is the entire `this`-binding minefield: C# has no `.bind(this)`, no "arrow function vs regular function" distinction, no callbacks that mysteriously lose their context. `this` inside any lambda is simply the enclosing instance, always. An entire category of JS bugs (and interview questions) doesn't exist here.
-- **Value types vs reference types** — `int`, `bool`, and `decimal` above are *value types*: assignment copies (like JS primitives). `class` instances are *reference types*: assignment shares (like JS objects). Matters for threading (Topic 7) and `int?`. (You can also declare your own value types with `struct` — unpacked three sections down.)
+| Construct | What you'd reach for in TS | What C# actually does (the point) |
+| --- | --- | --- |
+| **Numeric literal suffixes** | one `number` type | A literal *carries* its type: `5.75` is a `double`, `5.75m` is a `decimal`, `500_000` is an `int`. The `m` isn't decoration — without it, `5.75` won't assign to a `decimal` at all. **Always `decimal` for money.** |
+| **Nullability `string?`** | `strictNullChecks`, `string \| null` | Plain `string` means "never null", `string?` means "nullable". `??` and `?.` behave exactly as in TS. The difference: it's a compiler *warning* system layered on the type, not a separate union type. |
+| **Properties `{ get; set; }`** | `amount: number` on a class | `public int Amount { get; set; }` declares a *property*: a hidden backing field plus an auto getter/setter. Used like a field (`app.Amount = 5`), but can grow logic later without changing callers. `= "";` sets a default. *→ full unpack in the next section.* |
+| **Object initializer** | an object literal | `new Transfer { From = "Alice" }` *looks* like a literal but isn't: it calls the constructor, then assigns those properties. You can only set members that exist on the type — no ad-hoc shapes. |
+| **`new()` with no type name** | *(no equivalent)* | "Target-typed new". Inside a `List<Transfer>`, the compiler already knows the element type, so `new() { ... }` omits it. |
+| **Records** | `{ ...money, amount: 250 }` | `record Money(decimal Amount, string Currency);` generates a constructor, read-only properties, `ToString`, and **value-based equality** — two records with equal values are equal (classes compare by reference, like JS objects). `with { Amount = 250m }` is the spread-update. *→ full unpack below.* |
+| **`List<T>`** | a JS array | Your everyday growable list: `.Add()`, `.Count`, grows dynamically. Fixed-size arrays (`int[]`) exist, but `List<T>` is the default. |
+| **LINQ** | `.filter` / `.map` / `.reduce` | `.Where` / `.Select` / `.Sum` / `.Aggregate`; `.FirstOrDefault(pred)` = `.find(pred)`, `.OrderByDescending(...)` = sort. Same idea, different names — fluent in an hour. *→ full vocabulary two sections down.* |
+| **`Task` vs `Promise`** | `Promise<T>` | `Task` = `Promise<void>`, `Task<T>` = `Promise<T>`. Async method names end in `Async` by convention. The analogy has real cracks — completed Tasks await synchronously, continuations hop threads. *→ Topic 7 breaks it down properly.* |
+| **Local functions** | a hoisted named `function` | A function declared mid-file is callable before its declaration, just like a hoisted JS function. |
+| **Lambdas — no `this` trap** | a JS closure / arrow fn | `t => t.Amount > 500m` captures surrounding variables like a closure. What's *missing* is the whole `this`-binding minefield: no `.bind(this)`, no "arrow vs regular function", no callbacks that lose their context. `this` is always the enclosing instance. A whole category of JS bugs doesn't exist here. |
+| **Value vs reference types** | primitives vs objects | `int`, `bool`, `decimal` are *value types*: assignment copies (like JS primitives). `class` instances are *reference types*: assignment shares (like JS objects). Matters for threading (Topic 7) and `int?`. *→ declare your own with `struct`, unpacked below.* |
 
 ## Properties unpacked — what `{ get; set; }` actually is
 
@@ -118,11 +120,15 @@ public decimal Amount
 
 So `transfer.Amount = 5m` really calls a setter *method*, and `var x = transfer.Amount` calls the getter. It only *looks* like field access.
 
-**What if you drop the `{ get; set; }`?** `public decimal Amount;` still compiles — but it's now a **field**, not a property: a raw variable with no methods in between. Callers can't tell the difference (`transfer.Amount = 5m` works either way), but idiomatic C# never exposes public fields, for three practical reasons:
+### What if you drop the `{ get; set; }`?
+
+`public decimal Amount;` still compiles — but it's now a **field**, not a property: a raw variable with no methods in between. Callers can't tell the difference (`transfer.Amount = 5m` works either way). But idiomatic C# never exposes public fields, for three practical reasons:
 
 - **Serializers skip fields.** `System.Text.Json`, ASP.NET Core model binding, and EF Core mapping all work on *properties* by default. Make `Amount` a field and your API silently returns `{}` for it — a classic week-one bug.
 - **Interfaces can only demand properties**, never fields: `interface ITransfer { decimal Amount { get; } }` is legal; a field version isn't.
 - **Swapping a field for a property later is a breaking change** (they're different things in the compiled IL), so you can't quietly upgrade. Starting with a property keeps the door open.
+
+### The payoff: logic without breaking callers
 
 That door matters because a property can later grow logic without any call site changing:
 
@@ -137,9 +143,9 @@ public decimal Amount
 // transfer.Amount = -5m now throws — every existing caller got validation for free
 ```
 
-The TS mapping: `amount: number` in a TS class is the *field* version, and TS's `get amount() { ... }` / `set amount(v) { ... }` accessors are the *longhand property* version. What TS lacks is the one-line auto-property — you either take a plain field or hand-write both accessors plus the `_amount` backing field. C# made the good-practice version as cheap as the lazy version, which is why everything in C# is `{ get; set; }`.
+The TS mapping: `amount: number` in a TS class is the *field* version. TS's `get amount() { ... }` / `set amount(v) { ... }` accessors are the *longhand property* version. What TS lacks is the one-line auto-property — you either take a plain field or hand-write both accessors plus the `_amount` backing field. C# made the good-practice version as cheap as the lazy version, which is why everything in C# is `{ get; set; }`.
 
-Variants you'll meet immediately:
+### Property variants you'll meet immediately
 
 ```csharp
 public int Id { get; }                       // get-only: assignable ONLY in the constructor, immutable after
@@ -181,11 +187,13 @@ transfers.Add(jumboTransfer);                                // added AFTER the 
 Console.WriteLine(bigTransfers.Count());                     // ...still counted — the query runs HERE
 ```
 
-In JS, each `.filter().map()` step eagerly allocates a whole intermediate array. A LINQ chain streams each element through the entire pipeline with no intermediates — `.filter().map().slice(0, 3)` over a million rows does a million iterations twice in JS; the LINQ version stops after three survivors. The flip side: enumerate a query twice and it *executes* twice — `.ToList()` when you need the results pinned down.
+In JS, each `.filter().map()` step eagerly allocates a whole intermediate array. A LINQ chain streams each element through the entire pipeline with no intermediates. `.filter().map().slice(0, 3)` over a million rows does a million iterations twice in JS; the LINQ version stops after three survivors. The flip side: enumerate a query twice and it *executes* twice — call `.ToList()` when you need the results pinned down.
 
-**2. The same query can run somewhere else.** Because a lambda passed to LINQ can be captured as an *expression tree* (data describing the code, not just a function pointer — Topic 3's runtime types again), a provider can translate it. That's Topic 6's punchline, against the exact `Users` table you'll build in Topic 5: `_db.Users.Where(u => u.Balance > 1000m)` doesn't filter in memory — EF Core turns that exact C# into `WHERE "Balance" > 1000` in SQL. Prisma can't do this with a JS callback (`prisma.user.findMany` takes a JSON-ish filter object instead, precisely because a JS arrow function is opaque at runtime).
+**2. The same query can run somewhere else.** A lambda passed to LINQ can be captured as an *expression tree* — data describing the code, not just a function pointer (Topic 3's runtime types again). That lets a provider translate it. That's Topic 6's punchline, against the exact `Users` table you'll build in Topic 5: `_db.Users.Where(u => u.Balance > 1000m)` doesn't filter in memory — EF Core turns that exact C# into `WHERE "Balance" > 1000` in SQL. Prisma can't do this with a JS callback — `prisma.user.findMany` takes a JSON-ish filter object instead, precisely because a JS arrow function is opaque at runtime.
 
-One curiosity you'll see in older code: LINQ also has a SQL-ish *query syntax* — `from t in transfers where t.Amount > 500m select t.From`. It compiles to exactly the method calls above; modern codebases overwhelmingly use method syntax, so read it if you meet it, don't write it.
+:::note
+LINQ also has a SQL-ish *query syntax* you'll see in older code — `from t in transfers where t.Amount > 500m select t.From`. It compiles to exactly the method calls above. Modern codebases overwhelmingly use method syntax, so read it if you meet it, don't write it.
+:::
 
 ## Structs unpacked — your own value types
 
@@ -205,6 +213,8 @@ class FeeRateClass
 }
 ```
 
+### Copy vs share
+
 ```csharp
 // ---- struct: assignment COPIES (like a JS number) ----
 var rate = new FeeRate { Percent = 1.50m };
@@ -219,20 +229,26 @@ alias.Percent = 2.90m;
 Console.WriteLine(rateC.Percent); // 2.90 — "copy" was never a copy
 ```
 
-The class behavior is exactly the JS bug you've hunted before — mutating what you thought was a copy. The struct version is immune by construction: there's no sharing to leak through.
+The class behavior is exactly the JS bug you've hunted before — mutating what you thought was a copy. The struct version is immune by construction. There's no sharing to leak through.
 
-One level deeper — where the bytes actually live. This is the **heap vs stack** split, and it's the physical reason the two kinds behave differently:
+### Heap vs stack: where the bytes live
+
+This is the physical reason the two kinds behave differently:
 
 - **Reference types (`class`, `record`, arrays, `string`) live on the heap.** `new` allocates the object on the managed heap and hands your variable a *reference* (a pointer) to it. The garbage collector owns that memory and reclaims it once nothing points there. This is exactly the JS object model — every `{}` in JS is a heap object too.
-- **Value types (`struct`, `int`, `bool`, `decimal`) live inline.** A local struct sits directly on the **stack** (the per-call scratch memory that unwinds when the method returns); a struct *field* rides inside its containing object wherever that lives. No separate allocation, no pointer, no GC involvement.
+- **Value types (`struct`, `int`, `bool`, `decimal`) live inline.** A local struct sits directly on the **stack** (the per-call scratch memory that unwinds when the method returns). A struct *field* rides inside its containing object wherever that lives. No separate allocation, no pointer, no GC involvement.
 
-Consequences of inline storage: no garbage-collector pressure, and a `FeeRate[1_000_000]` is one contiguous block of memory instead of a million scattered heap objects the GC has to chase. Two caveats keep the model honest: a struct that's a *field of a class* rides along on the heap inside that object, and a struct handed to an `object`/interface variable gets **boxed** — copied onto the heap behind a reference. The rule is about the *declared* value type, not an absolute "structs never touch the heap." JS gives you no knob here — every non-primitive is a heap object and the engine decides the rest; `struct` is C# handing you the choice.
+Inline storage has two payoffs: no garbage-collector pressure, and a `FeeRate[1_000_000]` is one contiguous block of memory instead of a million scattered heap objects the GC has to chase.
+
+Two caveats keep the model honest. A struct that's a *field of a class* rides along on the heap inside that object. And a struct handed to an `object`/interface variable gets **boxed** — copied onto the heap behind a reference. The rule is about the *declared* value type, not an absolute "structs never touch the heap." JS gives you no knob here — every non-primitive is a heap object and the engine decides the rest. `struct` is C# handing you the choice.
 
 Structs can't participate in inheritance, and can't be `null` — unless you write `FeeRate?`, which is the same `Nullable<T>` mechanism as `int?`.
 
-**The plot twist:** you've been using structs all along. `int`, `bool`, `decimal`, `DateTime`, `TimeSpan`, `Guid` — all structs. That's *why* they copy like primitives. "Primitive" isn't a special category in C#; it's just "small struct from the standard library."
+### The plot twist: primitives are structs too
 
-When to reach for each:
+You've been using structs all along. `int`, `bool`, `decimal`, `DateTime`, `TimeSpan`, `Guid` — all structs. That's *why* they copy like primitives. "Primitive" isn't a special category in C#; it's just "small struct from the standard library."
+
+### When to reach for each
 
 | Reach for | When |
 |---|---|
@@ -240,13 +256,17 @@ When to reach for each:
 | `record` | data that flows — DTOs, requests; you want value *equality* and immutability |
 | `struct` | tiny, immutable, primitive-like values used in bulk — a fee rate, a coordinate, a date range; or hot paths where allocation shows up in profiling |
 
-Honest guidance: **you'll rarely write one.** Web API code defaults to classes and records; structs are a performance and semantics tool, and the ones you need daily (`DateTime`, `decimal`, `Guid`) already exist. Microsoft's own rule of thumb: small (≤ ~16 bytes), immutable, logically a single value. If you do write one, the modern spelling is the immutable combo:
+:::tip
+**You'll rarely write one.** Web API code defaults to classes and records. Structs are a performance and semantics tool, and the ones you need daily (`DateTime`, `decimal`, `Guid`) already exist. Microsoft's own rule of thumb: small (≤ ~16 bytes), immutable, logically a single value. If you do write one, the modern spelling is the immutable combo:
 
 ```csharp
 readonly record struct FeeRate(decimal Percent);   // value type + value equality + immutable
 ```
+:::
 
-One footgun worth naming: **mutable structs**. Because every assignment copies, mutating a struct you got *from* somewhere (a list element, a property getter) often mutates a temporary copy that's instantly discarded — the change silently vanishes. That's why the guidance is always "structs should be immutable," and why the example above only mutated local variables.
+:::caution
+**Mutable structs are a footgun.** Because every assignment copies, mutating a struct you got *from* somewhere (a list element, a property getter) often mutates a temporary copy that's instantly discarded — the change silently vanishes. That's why the guidance is always "structs should be immutable," and why the example above only mutated local variables.
+:::
 
 ## Records unpacked — positional vs non-positional
 
@@ -354,7 +374,7 @@ decimal x = fee(100m);
 Two footnotes that trip people up:
 
 - **Top-level statements are sugar.** Modern `Program.cs` lets you write executable lines — and even a `void Greet()` — with no visible class. The compiler wraps it all in an auto-generated `Main` inside a hidden class, so the rule still holds underneath: a top-level helper is really a *local function* inside `Main`.
-- **A local function is a method, not a delegate.** A helper you nest inside another method (say a `bool IsValid(...)` used only there) isn't a `Func<>` — it's a real, optionally `static`, method with no per-call allocation, and it can be called *before* its own declaration (unlike `var f = () => ...`, which must be declared first). Prefer it for named local helpers; reach for `Func`/`Action` only when you genuinely need a *value* to pass around or store.
+- **A local function is a method, not a delegate.** A helper you nest inside another method (say a `bool IsValid(...)` used only there) isn't a `Func<>` — it's a real, optionally `static`, method with no per-call allocation. It can even be called *before* its own declaration (unlike `var f = () => ...`, which must be declared first). Prefer it for named local helpers; reach for `Func`/`Action` only when you genuinely need a *value* to pass around or store.
 
 ## Not every type is a `class` — and the two ways C# "unifies" everything
 
@@ -368,7 +388,7 @@ The rule from the last section — *every member lives inside a type* — gets m
 enum Currency { Usd, Eur, Gbp }   // Usd = 0, Eur = 1, Gbp = 2 — the members ARE ints
 ```
 
-You cannot give an enum member a string value — `enum { Fx = "fx" }` is a compile error. This is a real gap vs TS, where enums *can* be string-valued (`enum X { Fx = 'fx' }`). So in C#, when you need a set of named **string** constants — like the named-`HttpClient` keys you'll write in Topic 8 — the idiom is a `static class` full of `public const string`:
+You cannot give an enum member a string value — `enum { Fx = "fx" }` is a compile error. This is a real gap vs TS, where enums *can* be string-valued (`enum X { Fx = 'fx' }`). So in C#, when you need a set of named **string** constants — like the named-`HttpClient` keys you'll write in Topic 8 — the idiom is a `static class` full of `public const string`.
 
 ```csharp
 public static class HttpClientNames
@@ -401,35 +421,37 @@ namespace PaymentApp.Models;   // file-scoped: applies to the whole file
 public class User { /* ... */ }
 ```
 
-`namespace X;` puts every type in the file into that named group; other files say `using PaymentApp.Models;` to see them — the *namespace*, never a file path. Conventions: namespace mirrors the folder (`Models/` → `PaymentApp.Models`), one public type per file, file named after the type.
+`namespace X;` puts every type in the file into that named group. Other files say `using PaymentApp.Models;` to see them — the *namespace*, never a file path. Conventions: namespace mirrors the folder (`Models/` → `PaymentApp.Models`), one public type per file, file named after the type.
 
 ### Why split `Models` / `Services` / `Controllers` at all?
 
-First, the surprising part: **the compiler doesn't care about folders.** Namespaces are purely logical names — you could put `namespace PaymentApp.Services;` in a file at the project root, or dump every type into one giant namespace, and everything would compile identically. The folder-mirrors-namespace rule is convention. So why does every .NET codebase follow it?
+First, the surprising part: **the compiler doesn't care about folders.** Namespaces are purely logical names. You could put `namespace PaymentApp.Services;` in a file at the project root, or dump every type into one giant namespace, and everything would compile identically. The folder-mirrors-namespace rule is convention. So why does every .NET codebase follow it?
 
-- **The `using` list becomes an architecture diagram.** Open any file in the API you'll build in Topic 5 and read its top lines: the service says `using PaymentApp.Data;` and `using PaymentApp.Models;` (touches the database, uses domain types); a model file has *no* usings at all. Granular namespaces make dependencies visible and directional — if someone adds `using PaymentApp.Controllers;` to a model, the layering violation is legible in one line during code review. A single flat namespace erases this signal: everything sees everything, silently.
+- **The `using` list becomes an architecture diagram.** Open any file in the API you'll build in Topic 5 and read its top lines: the service says `using PaymentApp.Data;` and `using PaymentApp.Models;` (touches the database, uses domain types); a model file has *no* usings at all. Granular namespaces make dependencies visible and directional. If someone adds `using PaymentApp.Controllers;` to a model, the layering violation is legible in one line during code review. A single flat namespace erases this signal: everything sees everything, silently.
 - **Full name tells you the file path.** `PaymentApp.Services.PaymentService` → `Services/PaymentService.cs`. In an unfamiliar 400-project codebase, that predictability is how you navigate — and it only works because everyone keeps the mirror intact.
 - **Tooling assumes it.** IDEs generate the namespace from the folder when you create a file, and analyzer rule **IDE0130** flags mismatches. Convention with guardrails.
 - **Smaller import surfaces.** A `using` pulls in a whole namespace — every type *and every extension method* in it. Splitting keeps a file that only needs models from having service types pollute its IntelliSense and overload resolution.
 
-The TS mapping makes the difference crisp: in Node, the **file path *is* the module identity** — `import { PaymentService } from './services/payment'` couples logical name to physical location by construction. C# fully decouples them, then the convention re-couples them for the humans. A namespace is roughly a barrel file (`services/index.ts`) — one name importing a curated group — except automatic, with no `export * from` to maintain.
+The TS mapping makes the difference crisp: in Node, the **file path *is* the module identity** — `import { PaymentService } from './services/payment'` couples logical name to physical location by construction. C# fully decouples them, then the convention re-couples them for the humans. A namespace is roughly a barrel file (`services/index.ts`) — one name importing a curated group — except it's automatic, with no `export * from` to maintain.
 
-(Honest footnote: in a five-file console app, one namespace is fine. The split earns its keep as projects grow — and since every codebase you'll join does it, this course does it from the first API file so the muscle memory is right.)
+:::note
+In a five-file console app, one namespace is fine. The split earns its keep as projects grow. Since every codebase you'll join does it, this course does it from the first API file so the muscle memory is right.
+:::
 
 ## The philosophy split: nominal typing, not structural
 
-TS is structural — "static duck typing": anything with the right properties *is* the type, no matter how it was declared. C# is nominal: compatibility comes from the **declared name and declared relationships**, and two types with byte-for-byte identical shapes are still completely unrelated.
+TS is structural — "static duck typing": anything with the right properties *is* the type, no matter how it was declared. C# is **nominal**: compatibility comes from the *declared name and declared relationships*. Two types with byte-for-byte identical shapes are still completely unrelated.
 
 Where this bites (and helps) day to day:
 
 - **No object literals.** There's no `const x = { name: "Jack" }` — every shape must be declared first. When you miss literals, a one-line `record` is the cure.
-- **Interfaces are implemented explicitly.** In TS, a class satisfies an interface just by having matching methods. In C#, `PaymentService` is an `IPaymentService` **only** because it declares `: IPaymentService` — delete that clause and compilation fails even though every method still matches. (Convention: every interface is named with an `I` prefix.) DI (Topic 5) binds by these declared relationships, never by shape — and `IPaymentService`/`PaymentService` is the exact pair you'll register in Topic 5.
+- **Interfaces are implemented explicitly.** In TS, a class satisfies an interface just by having matching methods. In C#, `PaymentService` is an `IPaymentService` **only** because it declares `: IPaymentService` — delete that clause and compilation fails even though every method still matches. (Convention: every interface is named with an `I` prefix.) DI (Topic 5) binds by these declared relationships, never by shape. `IPaymentService`/`PaymentService` is the exact pair you'll register in Topic 5.
 - **No assignment between look-alikes.** Two DTOs with identical fields still can't be passed for each other — you map field-by-field (the AutoMapper library exists purely to ease this friction).
 - **The flip side is a feature:** accidental substitution is impossible. A `UserId` and a `PaymentId` can both wrap an `int` and never be confused — what TS needs the "branded types" hack for, C# gives you by default.
 
 One more TS habit to drop: C# interfaces are used almost only as *behaviour contracts* (methods to implement), not to describe plain data shapes — classes and records do that job.
 
-## Interview talking points
+## Recap
 
 - Records vs classes: records for immutable data/DTOs (value equality, `with`), classes for entities with behaviour/mutable state.
 - `decimal` for money — never `float`/`double`. Saying this unprompted signals fintech experience.

@@ -359,7 +359,7 @@ PaymentApp/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I used Clean Architecture with four layers — Domain at the center with no dependencies, Application for use cases, Infrastructure for external concerns, and Api as the entry point."
 - "Project references are compile-time enforced — if I accidentally reference Infrastructure from Domain, the build fails."

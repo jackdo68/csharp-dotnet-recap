@@ -635,7 +635,7 @@ tests/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use xUnit because it's the modern standard. `[Fact]` is like Jest's `it()`, and `[Theory]` is like `test.each()`."
 - "I follow Arrange-Act-Assert: set up the test, do the action, check the result."

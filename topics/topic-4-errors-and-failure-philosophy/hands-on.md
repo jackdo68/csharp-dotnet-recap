@@ -547,7 +547,7 @@ src/PaymentApp.Domain/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "Domain exceptions carry business context — `InsufficientBalanceException` knows the current balance and requested amount."
 - "We catch exceptions by type, not with instanceof checks. The runtime routes to the right catch block."

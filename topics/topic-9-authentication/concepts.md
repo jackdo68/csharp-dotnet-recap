@@ -2,7 +2,7 @@
 
 > **How do login, tokens, and "who owns this money?" work in code?**
 
-This topic adds security to PaymentApp: users log in, get a token (a digital pass), and use it to prove who they are on every request.
+This topic adds security to PaymentApp. Users log in and get a token — a digital pass. They use that token to prove who they are on every request.
 
 ---
 
@@ -22,7 +22,9 @@ It has three parts separated by dots:
 | Payload | Your data: user ID, name, when it expires |
 | Signature | Proof that the server created this token |
 
-**Important:** The payload is **not encrypted** — anyone can read it. The signature just proves it wasn't changed. Never put passwords or secrets in a JWT.
+:::caution
+The payload is **not encrypted** — anyone can read it. The signature only proves it wasn't changed. Never put passwords or secrets in a JWT.
+:::
 
 ---
 
@@ -124,7 +126,11 @@ if (realUserId != claimedUserId)
 
 ## Password hashing
 
-**Never store passwords as plain text.** Instead, store a "hash" (a scrambled version that can't be reversed).
+:::danger
+Never store passwords as plain text.
+:::
+
+Instead, store a *hash* — a scrambled version that can't be reversed.
 
 ```csharp
 // When the user registers: hash the password
@@ -136,7 +142,7 @@ var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, "Passw0rd!");
 // Result: Success or Failed
 ```
 
-**Why not just use SHA256?**
+### Why not just use SHA256?
 
 | `SHA256(password)` | .NET Password Hasher |
 |-------------------|----------------------|
@@ -200,7 +206,9 @@ app.UseAuthentication();   // Check: who are you? (must be first)
 app.UseAuthorization();    // Check: are you allowed? (must be second)
 ```
 
-**Common mistake:** If you swap the order of `UseAuthentication` and `UseAuthorization`, nothing will work correctly.
+:::caution
+If you swap the order of `UseAuthentication` and `UseAuthorization`, nothing will work correctly.
+:::
 
 ### Protecting endpoints
 
@@ -249,7 +257,7 @@ Being vague protects your users.
 
 ---
 
-## Interview talking points
+## Recap
 
 - **Middleware order:** `UseAuthentication` must come before `UseAuthorization`. Swapping them breaks everything.
 - **401 vs 403:** 401 = "who are you?" (no/bad token). 403 = "I know who you are, but no" (ownership check failed).

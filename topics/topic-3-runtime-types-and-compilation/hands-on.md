@@ -422,7 +422,7 @@ src/PaymentApp.Domain/
 
 ---
 
-## Interview talking points
+## Recap
 
 - "TS types are erased at compile time; C# types are preserved in IL and enforced by the CLR."
 - "Reflection is why EF Core can build database schemas from my models without codegen."

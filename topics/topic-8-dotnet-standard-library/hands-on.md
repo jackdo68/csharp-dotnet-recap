@@ -185,7 +185,7 @@ rm test.txt
 | `Path.Combine`, string concat for `.meta.json` | Building paths portably |
 | `DateTime.UtcNow` | Storing the timestamp in UTC |
 
-**Interview talking point:** "I keep a JSON sidecar per file so the metadata travels with the document and stays human-readable. I serialize with camelCase + indentation for writing, and read back with `JsonSerializerDefaults.Web` so casing round-trips without extra config."
+**Key takeaway:** "I keep a JSON sidecar per file so the metadata travels with the document and stays human-readable. I serialize with camelCase + indentation for writing, and read back with `JsonSerializerDefaults.Web` so casing round-trips without extra config."
 
 ---
 
@@ -269,7 +269,7 @@ curl -OJ "http://localhost:5000/v1/document/download?userId=1"
 | `File.ReadAllBytesAsync` then return bytes | Whole file in RAM | Small files only |
 | `File.OpenRead` + `File(stream, ...)` | One small buffer | Any size — the default for downloads |
 
-**Interview talking point:** "For file downloads I return a `FileStreamResult` from `File.OpenRead`, not the whole byte array — the framework streams it and disposes the stream, so memory stays flat regardless of file size. That's the `Stream` ≈ Node `Readable` idea: data flows through, it isn't all held at once."
+**Key takeaway:** "For file downloads I return a `FileStreamResult` from `File.OpenRead`, not the whole byte array — the framework streams it and disposes the stream, so memory stays flat regardless of file size. That's the `Stream` ≈ Node `Readable` idea: data flows through, it isn't all held at once."
 
 ---
 
@@ -366,7 +366,7 @@ Thank you for banking with PaymentApp.
 | `DateTime.UtcNow:yyyy-MM-dd HH:mm:ss` | Formatting a timestamp |
 | `List<(string, string)>` + `foreach` | Collecting and iterating line items |
 
-**Interview talking point:** "For any string built in a loop I reach for `StringBuilder` — `+=` allocates a new string each iteration. And composite format items like `{label,-18}` handle alignment without manual padding."
+**Key takeaway:** "For any string built in a loop I reach for `StringBuilder` — `+=` allocates a new string each iteration. And composite format items like `{label,-18}` handle alignment without manual padding."
 
 ---
 
@@ -536,7 +536,7 @@ Thank you for banking with PaymentApp.
 
 **The Topic 10 link:** this named-client-plus-typed-wrapper is exactly what `PaymentProcessorClient` becomes — only the client name (`HttpClientNames.PaymentProcessor`), base URL (from config), and endpoints change. You've already built the pattern.
 
-**Interview talking point:** "I never `new` an `HttpClient`. I register a named client via `IHttpClientFactory` so the base URL and handler are configured once and the connection pool is reused — otherwise you get socket exhaustion under load. `AddHttpClient` registers the factory itself, so there's no separate wiring. And I keep the client name in a `const` rather than a raw string, so a mismatch between registration and consumer is a compile error instead of a `BaseAddress`-less client that fails on the first request. The typed wrapper keeps deserialization and error handling in one place."
+**Key takeaway:** "I never `new` an `HttpClient`. I register a named client via `IHttpClientFactory` so the base URL and handler are configured once and the connection pool is reused — otherwise you get socket exhaustion under load. `AddHttpClient` registers the factory itself, so there's no separate wiring. And I keep the client name in a `const` rather than a raw string, so a mismatch between registration and consumer is a compile error instead of a `BaseAddress`-less client that fails on the first request. The typed wrapper keeps deserialization and error handling in one place."
 
 ---
 
@@ -587,7 +587,7 @@ You've now used the big ones on real code. Here's the rest of the everyday surfa
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use `IHttpClientFactory` (named clients) instead of `new HttpClient()` to avoid socket exhaustion — the handler and base URL are configured once and pooled."
 - "`System.Text.Json` is the built-in library. I write camelCase + indented and read with `JsonSerializerDefaults.Web` so casing round-trips."

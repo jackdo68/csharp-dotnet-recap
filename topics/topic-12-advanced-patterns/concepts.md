@@ -8,7 +8,7 @@ This topic covers common architectural patterns you'll see in enterprise .NET ap
 
 ## Clean Architecture
 
-Clean Architecture organizes code into layers, with the most important code (business logic) at the center.
+**Clean Architecture** organizes code into layers. The most important code — business logic — sits at the center.
 
 ### The layers
 
@@ -34,7 +34,9 @@ Clean Architecture organizes code into layers, with the most important code (bus
 
 ### The dependency rule
 
-**Inner layers never know about outer layers.**
+:::note
+Inner layers never know about outer layers.
+:::
 
 | Layer | Depends on | Never depends on |
 |-------|------------|------------------|
@@ -74,7 +76,7 @@ PaymentApp.Api           → Depends on all
 
 ## Repository Pattern
 
-The Repository pattern hides database details behind an interface.
+The **Repository pattern** hides database details behind an interface.
 
 ### Without repository (direct DbContext)
 
@@ -140,13 +142,15 @@ Some argue Repository adds unnecessary complexity when using EF Core, because:
 - You lose EF Core features (LINQ flexibility)
 - More code to maintain
 
-**Pragmatic approach:** Use repositories for complex queries, but don't wrap every simple query.
+:::tip
+Use repositories for complex queries, but don't wrap every simple query.
+:::
 
 ---
 
 ## CQRS (Command Query Responsibility Segregation)
 
-CQRS separates reading data (queries) from changing data (commands).
+**CQRS** separates reading data (queries) from changing data (commands).
 
 ### Traditional approach
 
@@ -229,7 +233,7 @@ public class TransferHandler
 
 ## MediatR (Mediator Pattern)
 
-MediatR is a popular library that implements the mediator pattern. It routes requests to handlers.
+**MediatR** is a popular library that implements the *mediator pattern*. It routes requests to handlers.
 
 ```csharp
 // Instead of calling services directly:
@@ -267,7 +271,7 @@ For small applications, direct service calls are simpler.
 
 ## Domain-Driven Design (DDD)
 
-DDD is a way of thinking about complex software by focusing on the business domain.
+**DDD** is a way of thinking about complex software. It focuses on the business domain.
 
 ### Key concepts
 
@@ -361,7 +365,7 @@ public async Task Transfer(...) { }
 
 ## Event-Driven Architecture
 
-Instead of calling services directly, you publish events and handlers react to them.
+Instead of calling services directly, you publish an event. Handlers react to it.
 
 ```
 Traditional:
@@ -407,7 +411,7 @@ We added domain events (`UserBalanceChanged`), but didn't wire up handlers. In a
 
 ---
 
-## Interview talking points
+## Recap
 
 - "I use Clean Architecture to keep business logic separate from infrastructure. The Domain layer has no external dependencies."
 - "Repository pattern helps with testing — I can mock the repository instead of the database."

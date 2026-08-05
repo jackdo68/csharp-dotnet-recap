@@ -115,6 +115,54 @@ public class GitHubService
 }
 ```
 
+### Typed clients — the string-free alternative
+
+Named clients identify the config by a **string** (`CreateClient("github")`), which the compiler can't check. A **typed client** binds the config to a **type** instead — one call both registers your wrapper *and* configures its `HttpClient`, and DI injects a ready-to-use `HttpClient` straight into the constructor:
+
+```csharp
+// Program.cs — one line registers ExchangeRateClient AND configures its HttpClient.
+builder.Services.AddHttpClient<ExchangeRateClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.frankfurter.app/");
+});
+// No separate AddScoped<ExchangeRateClient>() — AddHttpClient<T> already registered it.
+
+// The client — takes HttpClient directly, no factory, no name string.
+public class ExchangeRateClient
+{
+    private readonly HttpClient _client;
+    public ExchangeRateClient(HttpClient client) => _client = client;
+}
+```
+
+Named vs typed is a **code-shape** choice, not a performance one (see below). Named wins when one factory feeds several differently-configured wrappers (PaymentApp keeps the named form so the `IHttpClientFactory` pattern stays visible for Topic 10); typed wins when it's one wrapper over one endpoint and you want the string gone.
+
+### "A new HttpClient per request" is not waste — the resource model
+
+The intuition that a fresh `HttpClient` each time is wasteful is exactly the misconception the factory exists to correct. Two different things get conflated:
+
+| Thing | Cost | Who owns it |
+|-------|------|-------------|
+| `HttpClient` object | Cheap — a thin wrapper, GC'd instantly | Created fresh, freely |
+| `HttpMessageHandler` + socket/connection pool | Expensive — real TCP connections, DNS | **Pooled and shared** by the factory |
+
+Socket exhaustion comes from `new HttpClient()` creating a **new handler + new connection pool** every time. The factory breaks that link: every `HttpClient` it hands out — typed *or* named — wraps a **shared, pooled handler**. So creating a fresh `HttpClient` object costs almost nothing; the sockets underneath are reused. (The factory rotates the pooled handler about every 2 minutes so DNS changes are eventually picked up.)
+
+Because the factory is a **singleton in both cases**, typed and named are identical everywhere that costs anything — `AddHttpClient<T>` *is* the factory pattern with the naming done for you, not a way around it:
+
+| Layer | Named + `AddScoped` | Typed `AddHttpClient<T>` |
+|-------|---------------------|--------------------------|
+| `IHttpClientFactory` | singleton | singleton — same |
+| Handler + socket pool | pooled, shared, ~2 min rotation | pooled, shared — same |
+| `HttpClient` object | new each time (`CreateClient` news one up) | new each time — same |
+| `ExchangeRateClient` wrapper | one per request (Scoped) | one per resolution (Transient) |
+
+Read down the two columns: they match on every expensive layer. Even the named form news up a fresh `HttpClient` on every `CreateClient` call. So the wrapper being Scoped vs Transient is the *only* difference — and, as the next section shows, that difference is negligible for a stateless wrapper.
+
+> **Node anchor:** this is connection pooling in `pg` (node-postgres). You build the `Pool` **once** (the singleton factory + handler pool); every query grabs a cheap client handle from it. Nobody frets that `pool.connect()` per request is wasteful — the *pool* is the expensive shared thing, the handle is throwaway. A factory `HttpClient` is that handle; `new HttpClient()` is the mistake of opening a brand-new pool per request.
+
+Why is the typed client **Transient** and does that matter? It doesn't: `ExchangeRateClient` holds only a reference to a pooled `HttpClient` and no per-request state, so a fresh one per injection is harmless — which is exactly the case Transient is for. Scoped vs Transient is a Topic 5 concept (a *scope* is one HTTP request; Scoped shares one instance across that request, Transient news up a fresh one per injection) — see **Topic 5 → DI lifetimes** for the full mechanism and the captive-dependency rule.
+
 ### Comparison with Node.js
 
 | Node.js | .NET |
@@ -606,6 +654,7 @@ using var stream = File.OpenRead("file.txt");
 ## Interview talking points
 
 - "I use `IHttpClientFactory` instead of creating `HttpClient` directly to avoid socket exhaustion (running out of network connections)."
+- "A fresh `HttpClient` per request isn't waste — the factory pools the `HttpMessageHandler` and its sockets underneath and just hands out a cheap wrapper. Named and typed clients are identical on resources; the factory is a singleton in both. I choose typed (`AddHttpClient<T>`) when I want the string gone and compile-time safety, named when one factory serves several configs."
 - "`System.Text.Json` is the built-in JSON library. I use `[JsonPropertyName]` when the JSON property names don't match my C# property names."
 - "For file operations, I use the async versions (`ReadAllTextAsync`, `WriteAllTextAsync`) to avoid blocking the thread."
 - "`StringBuilder` is faster than string concatenation (using `+`) when building strings in a loop."
